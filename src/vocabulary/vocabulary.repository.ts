@@ -19,6 +19,7 @@ export type VocabularyCreateInput = {
   partOfSpeech?: string
   examples: VocabularyExample[]
   status: VocabularyStatus
+  enrichmentStatus?: 'pending' | 'processing' | 'ready'
 }
 
 export type VocabularyListFilters = {
@@ -50,12 +51,15 @@ type VocabularyRow = {
   status: VocabularyStatus
   created_at: string
   updated_at: string
+  enrichment_status?: 'pending' | 'processing' | 'ready'
+  enrichment_attempts?: number
+  enrichment_next_retry_at?: string | null
 }
 
 const selectColumns = `
   SELECT id, user_id, language_pair_id, text, normalized_text, item_type,
     translations_json, transcription, part_of_speech, examples_json, status,
-    created_at, updated_at
+    created_at, updated_at, enrichment_status, enrichment_attempts, enrichment_next_retry_at
   FROM vocabulary_items
 `
 
@@ -74,6 +78,7 @@ function mapVocabulary(row: VocabularyRow): VocabularyItem {
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(row.enrichment_status && row.enrichment_status !== 'ready' ? { enrichmentStatus: row.enrichment_status } : {}),
   }
 }
 
@@ -102,8 +107,8 @@ export class VocabularyRepository {
       INSERT INTO vocabulary_items
         (id, user_id, language_pair_id, text, normalized_text, item_type,
          translations_json, transcription, part_of_speech, examples_json,
-         status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         status, created_at, updated_at, enrichment_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       item.id,
       item.userId,
@@ -118,8 +123,47 @@ export class VocabularyRepository {
       item.status,
       item.createdAt,
       item.updatedAt,
+      input.enrichmentStatus ?? 'ready',
     )
     return item
+  }
+
+  updateEnrichment(userId: string, itemId: string, patch: {
+    translations: string[]
+    transcription?: string
+    partOfSpeech?: string
+    examples: VocabularyExample[]
+    status: 'pending' | 'ready'
+    error?: string
+  }): VocabularyItem | null {
+    const now = new Date().toISOString()
+    this.db.prepare(`
+      UPDATE vocabulary_items
+      SET translations_json = ?, transcription = ?, part_of_speech = ?, examples_json = ?,
+          enrichment_status = ?, enrichment_attempts = enrichment_attempts + 1,
+          enrichment_last_error = ?, enriched_at = ?, enrichment_next_retry_at = ?, updated_at = ?
+      WHERE user_id = ? AND id = ?
+    `).run(
+      JSON.stringify(patch.translations), patch.transcription ?? null, patch.partOfSpeech ?? null,
+      JSON.stringify(patch.examples), patch.status, patch.error ?? null,
+      patch.status === 'ready' ? now : null,
+      patch.status === 'pending' ? new Date(Date.now() + 60_000).toISOString() : null,
+      now, userId, itemId,
+    )
+    return this.findByIdForUser(userId, itemId)
+  }
+
+  listPending(limit: number): VocabularyItem[] {
+    return (this.db.prepare(`${selectColumns} WHERE enrichment_status = 'pending' AND (enrichment_next_retry_at IS NULL OR enrichment_next_retry_at <= ?) ORDER BY created_at, id LIMIT ?`).all(new Date().toISOString(), limit) as VocabularyRow[]).map(mapVocabulary)
+  }
+
+  resetStaleProcessing(): void {
+    this.db.prepare("UPDATE vocabulary_items SET enrichment_status = 'pending', updated_at = ? WHERE enrichment_status = 'processing'").run(new Date().toISOString())
+  }
+
+  claimPending(userId: string, itemId: string): VocabularyItem | null {
+    const result = this.db.prepare("UPDATE vocabulary_items SET enrichment_status = 'processing', updated_at = ? WHERE user_id = ? AND id = ? AND enrichment_status = 'pending'").run(new Date().toISOString(), userId, itemId)
+    return result.changes === 1 ? this.findByIdForUser(userId, itemId) : null
   }
 
   findByIdForUser(userId: string, itemId: string): VocabularyItem | null {

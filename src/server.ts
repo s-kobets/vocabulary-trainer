@@ -4,6 +4,9 @@ import { createHttpApp } from './http'
 import { loadConfig } from './config'
 import { openDatabase, runMigrations, type SqliteDatabase } from './db/database'
 import { MockDictionaryProvider } from './dictionary/mock-dictionary.provider'
+import { OpenAiDictionaryProvider } from './dictionary/openai-dictionary.provider'
+import { EnrichmentWorker } from './vocabulary/enrichment.worker'
+import { registerCommandMenu } from './telegram/commands'
 import { LanguagePairRepository } from './languages/language-pair.repository'
 import { LanguagePairService } from './languages/language-pair.service'
 import { ReviewRepository } from './reviews/review.repository'
@@ -38,6 +41,7 @@ export async function start(): Promise<void> {
   let db: SqliteDatabase | undefined
   let app: ReturnType<typeof createHttpApp> | undefined
   let bot: ReturnType<typeof createBot> | undefined
+  let enrichmentWorker: EnrichmentWorker | undefined
   let cleanupStarted = false
   let shutdownPromise: Promise<void> | undefined
 
@@ -62,6 +66,7 @@ export async function start(): Promise<void> {
         app?.log.error({ phase: 'shutdown', ...errorMetadata(error, [config.telegramBotToken, config.sessionSecret]) }, 'Telegram shutdown failed')
       }
     }
+    await enrichmentWorker?.stop()
     if (app) {
       try {
         await app.close()
@@ -92,7 +97,10 @@ export async function start(): Promise<void> {
     const reviews = new ReviewRepository(db)
     const userService = new UserService(db, users, telegramAccounts, userSettings)
     const languagePairService = new LanguagePairService(db, languagePairs)
-    const vocabularyService = new VocabularyService(vocabulary, new MockDictionaryProvider())
+     const dictionaryProvider = config.openAiApiKey
+       ? new OpenAiDictionaryProvider({ apiKey: config.openAiApiKey, model: config.openAiModel })
+       : new MockDictionaryProvider()
+     const vocabularyService = new VocabularyService(vocabulary, dictionaryProvider)
     const reviewService = new ReviewService(db, reviews, vocabulary)
 
     app = createHttpApp(db)
@@ -100,17 +108,29 @@ export async function start(): Promise<void> {
     const logger = app.log as unknown as { error: (...args: unknown[]) => void }
     const dependencies = {
       userService,
+      db,
       languagePairService,
       vocabularyService,
       reviewService,
       logger,
     }
     bot = createBot(config.telegramBotToken, dependencies)
+    enrichmentWorker = new EnrichmentWorker(vocabulary, dictionaryProvider, languagePairs)
     process.once('SIGINT', sigintHandler)
     process.once('SIGTERM', sigtermHandler)
 
     app.log.info({ phase: 'telegram', port: config.port }, 'Starting Telegram bot')
     await bot.launch()
+    if (cleanupStarted) {
+      if (shutdownPromise) await shutdownPromise
+      return
+    }
+    try {
+      await registerCommandMenu(bot)
+    } catch (error) {
+      app.log.warn({ errorType: error instanceof Error ? 'Error' : typeof error }, 'Telegram command menu registration failed')
+    }
+    enrichmentWorker.start()
     if (cleanupStarted) {
       if (shutdownPromise) await shutdownPromise
       return

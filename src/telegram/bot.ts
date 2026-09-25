@@ -3,10 +3,12 @@ import { registerStartHandlers } from './start.handlers'
 import { registerReviewHandlers } from './review.handlers'
 import { registerVocabularyHandlers } from './vocabulary.handlers'
 import type { BotContext, BotDependencies, BotSession } from './telegram.types'
+import { createSqliteSessionMiddleware } from './sqlite-session'
 
 export function createBot(token: string, dependencies: BotDependencies): Telegraf<BotContext> {
   const bot = new Telegraf<BotContext>(token)
-  bot.use(session<BotSession, BotContext>({ defaultSession: () => ({}) }))
+  if (dependencies.db) bot.use(createSqliteSessionMiddleware(dependencies.db))
+  else bot.use(session<BotSession, BotContext>({ defaultSession: () => ({}) }))
   registerStartHandlers(bot, dependencies)
   registerReviewHandlers(bot, dependencies)
   registerVocabularyHandlers(bot, dependencies)

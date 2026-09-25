@@ -1,6 +1,6 @@
 import { Markup, type Telegraf } from 'telegraf'
 import { getCurrentUser } from './context'
-import { renderDuplicate, renderInbox, renderVocabularyAdded } from './messages'
+import { renderDuplicate, renderInbox, renderVocabularyAdded, renderVocabularyPending } from './messages'
 import type { BotContext, BotDependencies } from './telegram.types'
 
 const providerFailureMessage = "I couldn't process this word right now.\nPlease try again later."
@@ -24,7 +24,7 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
 
     try {
       const result = await dependencies.vocabularyService.addText(user.id, pair, text)
-      await ctx.reply(result.duplicate ? renderDuplicate(result.item) : renderVocabularyAdded(result.item))
+      await ctx.reply(result.duplicate ? renderDuplicate(result.item) : result.pending ? renderVocabularyPending(result.item) : renderVocabularyAdded(result.item))
     } catch (error) {
       dependencies.logger.error({ errorType: error instanceof Error ? 'Error' : typeof error }, 'Vocabulary provider failed')
       await ctx.reply(providerFailureMessage)

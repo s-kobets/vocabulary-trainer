@@ -26,12 +26,33 @@ test('migrations create the schema and are idempotent', () => {
     'schema_migrations',
     'sessions',
     'telegram_accounts',
+    'telegram_sessions',
     'user_settings',
     'users',
     'vocabulary_items',
   ])
-  assert.deepEqual(migrations.map((row) => row.version), ['001'])
+  assert.deepEqual(migrations.map((row) => row.version), ['001', '002'])
   assert.equal(isDatabaseHealthy(db), true)
+  db.close()
+})
+
+test('persistent session and enrichment migration preserves existing vocabulary', () => {
+  const db = new Database(':memory:')
+  runMigrations(db, migrationDirectory)
+
+  const columns = db.prepare('PRAGMA table_info(vocabulary_items)').all() as { name: string }[]
+  assert.ok(columns.some((column) => column.name === 'enrichment_status'))
+  assert.ok(columns.some((column) => column.name === 'enrichment_attempts'))
+  assert.ok(columns.some((column) => column.name === 'enrichment_last_error'))
+  assert.ok(columns.some((column) => column.name === 'enriched_at'))
+
+  db.prepare("INSERT INTO users (id, created_at) VALUES ('user', 'now')").run()
+  db.prepare("INSERT INTO language_pairs (id, user_id, source_language, target_language, created_at) VALUES ('pair', 'user', 'en', 'ru', 'now')").run()
+  db.prepare("INSERT INTO vocabulary_items (id, user_id, language_pair_id, text, normalized_text, item_type, translations_json, status, created_at, updated_at) VALUES ('item', 'user', 'pair', 'word', 'word', 'word', '[\"слово\"]', 'inbox', 'now', 'now')").run()
+
+  const item = db.prepare('SELECT enrichment_status, enrichment_attempts FROM vocabulary_items WHERE id = ?').get('item') as { enrichment_status: string; enrichment_attempts: number }
+  assert.deepEqual(item, { enrichment_status: 'ready', enrichment_attempts: 0 })
+  assert.deepEqual(db.prepare('SELECT * FROM telegram_sessions').all(), [])
   db.close()
 })
 

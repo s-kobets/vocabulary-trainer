@@ -17,6 +17,10 @@ export function renderVocabularyAdded(item: VocabularyItem): string {
   return `${renderItem(item)}\n\nAdded to Inbox`
 }
 
+export function renderVocabularyPending(item: VocabularyItem): string {
+  return `${item.text}\n\nAdded to Inbox. Card details will be available after enrichment.`
+}
+
 export function renderDuplicate(item: VocabularyItem): string {
   return `${item.text} is already in your vocabulary.`
 }

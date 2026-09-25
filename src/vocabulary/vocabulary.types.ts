@@ -16,4 +16,5 @@ export type VocabularyItem = {
   status: VocabularyStatus
   createdAt: string
   updatedAt: string
+  enrichmentStatus?: 'pending' | 'processing' | 'ready'
 }

@@ -7,6 +7,8 @@ export type Config = {
   telegramBotToken: string
   appUrl?: string
   sessionSecret?: string
+  openAiApiKey?: string
+  openAiModel: string
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -27,5 +29,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     telegramBotToken,
     appUrl: env.APP_URL,
     sessionSecret: env.SESSION_SECRET,
+    openAiApiKey: env.OPENAI_API_KEY?.trim(),
+    openAiModel: env.OPENAI_MODEL ?? 'gpt-4o-mini',
   }
 }
