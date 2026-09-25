@@ -23,10 +23,14 @@ const item: VocabularyItem = {
 function createHarness(options: {
   currentUser?: typeof user | null
   defaultPair?: LanguagePair | null
-  addText?: () => Promise<{ item: VocabularyItem; duplicate: boolean }>
+  addText?: (userId: string, pair: LanguagePair, text: string) => Promise<{ item: VocabularyItem; duplicate: boolean }>
   inboxItems?: VocabularyItem[]
   inboxCount?: number
+  learningItems?: VocabularyItem[]
+  learningCount?: number
   startLearning?: () => number
+  deleteText?: (userId: string, pairId: string, text: string) => boolean
+  activePair?: LanguagePair | null
 } = {}) {
   const handlers = new Map<string, Handler[]>()
   const replies: Array<{ text: string; extra?: unknown }> = []
@@ -36,11 +40,18 @@ function createHarness(options: {
     userService: {
       findByTelegramUserId: () => options.currentUser === undefined ? user : options.currentUser,
     },
-    languagePairService: { findDefaultForUser: () => options.defaultPair === undefined ? pair : options.defaultPair },
+    languagePairService: { findDefaultForUser: () => options.activePair ?? (options.defaultPair === undefined ? pair : options.defaultPair) },
     vocabularyService: {
       addText: options.addText ?? (async () => ({ item, duplicate: false })),
-      listForUser: () => options.inboxItems ?? [item],
-      countByStatus: () => options.inboxCount ?? 1,
+      listForUser: (_userId: string, filters?: { status?: string }) => filters?.status === 'learning'
+        ? options.learningItems ?? [item]
+        : options.inboxItems ?? [item],
+      countByStatus: (_userId: string, status?: string) => status === 'learning'
+        ? options.learningCount ?? 1
+        : options.inboxCount ?? 1,
+      deleteText: options.deleteText ?? (() => false),
+      delete: () => false,
+      findForUser: () => item,
     },
     reviewService: { startLearning: options.startLearning ?? (() => 1) },
     logger: { error: (...args: unknown[]) => loggerCalls.push(args) },
@@ -63,14 +74,22 @@ function createHarness(options: {
     dependencies, handlers, replies, loggerCalls,
     context, callbackAnswers: () => callbackAnswers,
     text: async (message: string) => {
-      for (const handler of handlers.get('text') ?? []) await handler(context(message))
+      for (const handler of handlers.get('text') ?? []) await handler(context(message), async () => undefined)
     },
     inbox: async () => handlers.get('command:inbox')?.[0]?.(context('/inbox')),
-    callback: async (data: string) => {
-      for (const handler of handlers.get('callback_query') ?? []) {
-        await handler(context('', data), async () => undefined)
-      }
+    delete: async (message: string, session: BotContext['session'] = {}) => {
+      const ctx = context(message)
+      ctx.session = session
+      await handlers.get('command:delete')?.[0]?.(ctx)
+      return ctx
     },
+  callback: async (data: string, session: BotContext['session'] = {}) => {
+    for (const handler of handlers.get('callback_query') ?? []) {
+        const ctx = context('', data)
+        ctx.session = session
+        await handler(ctx, async () => undefined)
+    }
+  },
   }
 }
 
@@ -93,6 +112,17 @@ test('ordinary text captures vocabulary and ignores commands', async () => {
   assert.equal(captured, 'reliable')
   assert.equal(harness.replies.length, 1)
   assert.match(harness.replies[0].text, /Added to Inbox/)
+})
+
+test('text middleware forwards slash commands to later command handlers', async () => {
+  const harness = createHarness()
+  let forwarded = false
+  const handler = harness.handlers.get('text')?.[0]
+
+  await handler?.(harness.context('/help'), async () => { forwarded = true })
+
+  assert.equal(forwarded, true)
+  assert.equal(harness.replies.length, 0)
 })
 
 test('capture requires existing user and default pair', async () => {
@@ -120,6 +150,7 @@ test('/inbox renders count, item text, and Learn all callback', async () => {
   assert.match(harness.replies[0].text, /Inbox: 3.*reliable/s)
   assert.match(JSON.stringify(harness.replies[0].extra), /Learn all/)
   assert.match(JSON.stringify(harness.replies[0].extra), /inbox:learn_all/)
+  assert.doesNotMatch(JSON.stringify(harness.replies[0].extra), /vocabulary:delete:item:/)
 })
 
 test('/inbox passes newest-item ordering request to vocabulary service', async () => {
@@ -145,4 +176,123 @@ test('Learn all acknowledges callback and is idempotent through service result',
   assert.equal(harness.callbackAnswers(), 2)
   assert.match(harness.replies[0].text, /2/)
   assert.match(harness.replies[1].text, /0/)
+})
+
+test('callback middleware forwards callbacks owned by other handlers', async () => {
+  const harness = createHarness()
+  let forwarded = false
+  const handler = harness.handlers.get('callback_query')?.[0]
+
+  await handler?.(harness.context('', 'languages:add'), async () => { forwarded = true })
+
+  assert.equal(forwarded, true)
+  assert.equal(harness.callbackAnswers(), 1)
+})
+
+test('bulk text trims lines, skips blanks, and reports added and duplicate counts', async () => {
+  const received: string[] = []
+  const harness = createHarness({
+    addText: async (_userId: string, _pair: LanguagePair, text: string) => {
+      received.push(text)
+      return { item, duplicate: text === 'waste' }
+    },
+  })
+
+  await harness.text(' approximate \n\nbesties\n waste \n')
+
+  assert.deepEqual(received, ['approximate', 'besties', 'waste'])
+  assert.match(harness.replies[0].text, /Added: 2.*Duplicates: 1.*Failed: 0/s)
+})
+
+test('/learning lists active-pair learning words with a review button', async () => {
+  const learningItems = Array.from({ length: 10 }, (_, index) => ({ ...item, id: `learning-${index}`, text: `word-${index}` }))
+  const harness = createHarness({ learningItems, learningCount: 12 })
+
+  const handlers = harness.handlers.get('command:learning')
+  await handlers?.[0]?.(harness.context('/learning'))
+
+  assert.match(harness.replies.at(-1)?.text ?? '', /Learning: 12.*word-0.*word-9/s)
+  assert.match(JSON.stringify(harness.replies.at(-1)?.extra), /review:start_due/)
+})
+
+test('/learning reports an empty list without a review button', async () => {
+  const harness = createHarness({ learningItems: [], learningCount: 0 })
+
+  await harness.handlers.get('command:learning')?.[0]?.(harness.context('/learning'))
+
+  assert.equal(harness.replies.at(-1)?.text, 'Learning list is empty')
+  assert.equal(harness.replies.at(-1)?.extra, undefined)
+})
+
+test('bulk text continues after item failure and reports failed count', async () => {
+  const received: string[] = []
+  const harness = createHarness({
+    addText: async (_userId: string, _pair: LanguagePair, text: string) => {
+      received.push(text)
+      if (text === 'waste') throw new Error('provider secret')
+      return { item, duplicate: false }
+    },
+  })
+
+  await harness.text('filled\nwaste\nexceeded')
+
+  assert.deepEqual(received, ['filled', 'waste', 'exceeded'])
+  assert.match(harness.replies[0].text, /Added: 2.*Duplicates: 0.*Failed: 1/s)
+  assert.equal(JSON.stringify(harness.loggerCalls).includes('provider secret'), false)
+})
+
+test('all-empty bulk text is rejected without calling vocabulary service', async () => {
+  let calls = 0
+  const harness = createHarness({
+    addText: async () => { calls++; return { item, duplicate: false } },
+  })
+
+  await harness.text(' \n\n  ')
+
+  assert.equal(calls, 0)
+  assert.equal(harness.replies[0].text, 'Please provide at least one word or phrase')
+})
+
+test('/delete removes one normalized word immediately', async () => {
+  const deleted: string[] = []
+  const harness = createHarness({
+    deleteText: (_userId, _pairId, text) => { deleted.push(text); return true },
+  })
+
+  await harness.delete('/delete  Reliable  ')
+
+  assert.deepEqual(deleted, ['reliable'])
+  assert.match(harness.replies.at(-1)?.text ?? '', /Deleted: 1.*Not found: 0/s)
+})
+
+test('/delete requests confirmation for unique multiline words and confirms them', async () => {
+  const deleted: string[] = []
+  const harness = createHarness({
+    deleteText: (_userId, _pairId, text) => { deleted.push(text); return text === 'reliable' },
+  })
+  const session: BotContext['session'] = {}
+
+  await harness.delete('/delete\n Reliable \n\nreliable\nmissing', session)
+  assert.deepEqual(deleted, [])
+  assert.equal(session.pendingDelete?.words.length, 2)
+  assert.match(harness.replies.at(-1)?.text ?? '', /Delete 2 matching words\?/)
+
+  await harness.callback('vocabulary:delete:confirm', session)
+
+  assert.deepEqual(deleted, ['reliable', 'missing'])
+  assert.equal(session.pendingDelete, undefined)
+  assert.match(harness.replies.at(-1)?.text ?? '', /Deleted: 1.*Not found: 1/s)
+})
+
+test('bulk delete cancel clears pending state without deleting', async () => {
+  let calls = 0
+  const harness = createHarness({ deleteText: () => { calls++; return true } })
+  const session: BotContext['session'] = {}
+
+  await harness.delete('/delete\nfirst\nsecond', session)
+  await harness.callback('vocabulary:delete:cancel', session)
+
+  assert.equal(calls, 0)
+  assert.equal(session.pendingDelete, undefined)
+  assert.equal(harness.replies.at(-1)?.text, 'Delete cancelled')
 })

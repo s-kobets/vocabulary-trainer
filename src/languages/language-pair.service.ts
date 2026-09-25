@@ -13,6 +13,32 @@ export class LanguagePairService {
     return this.pairs.findDefaultForUser(userId)
   }
 
+  listForUser(userId: string): LanguagePair[] {
+    return this.pairs.findForUser(userId)
+  }
+
+  selectForUser(userId: string, pairId: string): LanguagePair {
+    const pair = this.pairs.findByIdForUser(userId, pairId)
+    if (!pair) throw new Error(`Language pair ${pairId} does not belong to user ${userId}`)
+    this.pairs.setDefault(userId, pairId)
+    return this.pairs.findByIdForUser(userId, pairId) as LanguagePair
+  }
+
+  deleteForUser(userId: string, pairId: string): 'deleted' | 'has_vocabulary' {
+    return this.db.transaction(() => {
+      const pair = this.pairs.findByIdForUser(userId, pairId)
+      if (!pair) throw new Error(`Language pair ${pairId} does not belong to user ${userId}`)
+      if (this.pairs.countVocabularyForUserPair(userId, pairId) > 0) return 'has_vocabulary'
+
+      this.pairs.deleteForUser(userId, pairId)
+      if (pair.isDefault) {
+        const replacement = this.pairs.findForUser(userId)[0]
+        if (replacement) this.pairs.setDefault(userId, replacement.id)
+      }
+      return 'deleted'
+    })()
+  }
+
   createDefault(userId: string, source: string, target: string): LanguagePair {
     const codes = new Set(getLanguages().map((language) => language.code))
     for (const code of [source, target]) {

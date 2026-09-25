@@ -50,6 +50,16 @@ export class VocabularyService {
     return this.repository.findByIdForUser(userId, itemId)
   }
 
+  deleteText(userId: string, pairId: string, rawText: string): boolean {
+    const normalizedText = normalizeText(rawText)
+    if (!normalizedText) return false
+    return this.repository.deleteByNormalizedText(userId, pairId, normalizedText)
+  }
+
+  deleteForUser(userId: string, itemId: string): boolean {
+    return this.repository.delete(userId, itemId)
+  }
+
   listForUser(userId: string, filters: VocabularyListFilters = {}): VocabularyItem[] {
     return this.repository.listForUser(userId, filters)
   }

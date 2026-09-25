@@ -39,14 +39,14 @@ async function expire(ctx: BotContext): Promise<void> {
 }
 
 export function registerReviewHandlers(bot: Telegraf<BotContext>, dependencies: BotDependencies): void {
-  bot.command('review', async (ctx) => {
+  const startReview = async (ctx: BotContext, languagePairId?: string): Promise<void> => {
     const user = getCurrentUser(ctx, dependencies.userService)
     if (!user) {
       await ctx.reply('Please send /start first')
       return
     }
 
-    const due = dependencies.reviewService.getDue(user.id, new Date(), 50)
+    const due = dependencies.reviewService.getDue(user.id, new Date(), 50, languagePairId)
     if (due.length === 0) {
       await ctx.reply('Nothing to review right now')
       return
@@ -59,11 +59,34 @@ export function registerReviewHandlers(bot: Telegraf<BotContext>, dependencies: 
       revealed: false,
     }
     await ctx.reply(renderReviewPrompt(due[0].item, 1, due.length), reviewKeyboard(due[0].item.id))
+  }
+
+  bot.command('review', async (ctx) => {
+    await startReview(ctx)
   })
 
   bot.on('callback_query', async (ctx, next) => {
     if (!('data' in ctx.callbackQuery)) {
       await next()
+      return
+    }
+
+    if (ctx.callbackQuery.data === 'review:start_due') {
+      try {
+        const user = getCurrentUser(ctx, dependencies.userService)
+        const pair = user ? dependencies.languagePairService.findDefaultForUser(user.id) : null
+        if (!user) {
+          await ctx.reply('Please send /start first')
+          return
+        }
+        if (!pair) {
+          await ctx.reply('Choose your languages with /start first')
+          return
+        }
+        await startReview(ctx, pair.id)
+      } finally {
+        await ctx.answerCbQuery()
+      }
       return
     }
 

@@ -101,7 +101,11 @@ function mapItem(row: VocabularyRow | DueRow): VocabularyItem {
 export class ReviewRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  findDueForUser(userId: string, now: Date, limit: number): DueReview[] {
+  findDueForUser(userId: string, now: Date, limit: number, languagePairId?: string): DueReview[] {
+    const pairCondition = languagePairId === undefined ? '' : 'AND vocabulary_items.language_pair_id = ?'
+    const parameters = languagePairId === undefined
+      ? [userId, userId, now.toISOString(), limit]
+      : [userId, userId, now.toISOString(), languagePairId, limit]
     const rows = this.db.prepare(`
       SELECT
         review_states.id AS state_id, review_states.user_id AS state_user_id,
@@ -117,12 +121,13 @@ export class ReviewRepository {
       FROM review_states
       JOIN vocabulary_items ON vocabulary_items.id = review_states.vocabulary_item_id
       WHERE review_states.user_id = ?
-        AND vocabulary_items.user_id = ?
-        AND vocabulary_items.status IN ('learning', 'known')
-        AND review_states.next_review_at <= ?
+         AND vocabulary_items.user_id = ?
+         AND vocabulary_items.status IN ('learning', 'known')
+         AND review_states.next_review_at <= ?
+         ${pairCondition}
       ORDER BY review_states.next_review_at, vocabulary_items.created_at
       LIMIT ?
-    `).all(userId, userId, now.toISOString(), limit) as DueRow[]
+    `).all(...parameters) as DueRow[]
     return rows.map((row) => ({ item: mapItem(row), state: mapState(row) }))
   }
 

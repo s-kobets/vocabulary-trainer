@@ -71,3 +71,35 @@ test('setDefault rejects a pair owned by another user', () => {
   assert.equal(repository.findDefaultForUser('user-a')?.id, pair.id)
   db.close()
 })
+
+test('lists pairs, selects an owned pair, and rejects foreign pairs', () => {
+  const { db, repository, service } = createLanguagePairs()
+  const first = service.createDefault('user-a', 'en', 'ru')
+  const second = service.createDefault('user-a', 'de', 'ru')
+
+  assert.deepEqual(new Set(service.listForUser('user-a').map((pair) => pair.id)), new Set([first.id, second.id]))
+  assert.equal(service.selectForUser('user-a', first.id).id, first.id)
+  assert.equal(repository.findDefaultForUser('user-a')?.id, first.id)
+  assert.throws(() => service.selectForUser('user-b', first.id), /does not belong to user/)
+  db.close()
+})
+
+test('protects pairs with vocabulary and replaces a deleted active pair', () => {
+  const { db, repository, service } = createLanguagePairs()
+  const first = service.createDefault('user-a', 'en', 'ru')
+  const second = service.createDefault('user-a', 'de', 'ru')
+
+  db.prepare(`
+    INSERT INTO vocabulary_items
+      (id, user_id, language_pair_id, text, normalized_text, item_type, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'word', 'inbox', ?, ?)
+  `).run('item-a', 'user-a', first.id, 'word', 'word', new Date().toISOString(), new Date().toISOString())
+
+  assert.equal(service.deleteForUser('user-a', first.id), 'has_vocabulary')
+  assert.ok(repository.findByIdForUser('user-a', first.id))
+
+  assert.equal(service.deleteForUser('user-a', second.id), 'deleted')
+  assert.equal(repository.findByIdForUser('user-a', second.id), null)
+  assert.equal(repository.findDefaultForUser('user-a')?.id, first.id)
+  db.close()
+})

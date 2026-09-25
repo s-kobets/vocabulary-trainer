@@ -191,6 +191,14 @@ export class VocabularyRepository {
     return result.changes === 1
   }
 
+  deleteByNormalizedText(userId: string, pairId: string, normalizedText: string): boolean {
+    const result = this.db.prepare(`
+      DELETE FROM vocabulary_items
+      WHERE user_id = ? AND language_pair_id = ? AND normalized_text = ?
+    `).run(userId, pairId, normalizedText)
+    return result.changes === 1
+  }
+
   countByStatus(userId: string, status: VocabularyStatus): number {
     const row = this.db.prepare(`
       SELECT COUNT(*) AS count FROM vocabulary_items WHERE user_id = ? AND status = ?

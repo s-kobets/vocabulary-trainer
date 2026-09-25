@@ -40,6 +40,7 @@ function createHarness(options: {
   const edits: Array<{ text: string; extra?: unknown }> = []
   const answers: string[] = []
   const answerCalls: Array<{ userId: string; itemId: string; result: string }> = []
+  const duePairIds: Array<string | undefined> = []
   const dependencies = {
     userService: {
       findByTelegramUserId: () => options.currentUser === undefined ? user : options.currentUser,
@@ -51,8 +52,12 @@ function createHarness(options: {
         return itemId === 'item-1' ? item(itemId, 'reliable') : item(itemId, 'steady')
       },
     },
+    languagePairService: { findDefaultForUser: () => pair },
     reviewService: {
-      getDue: () => options.due ?? [review(item('item-1', 'reliable')), review(item('item-2', 'steady'))],
+      getDue: (_userId: string, _now: Date, _limit: number, pairId?: string) => {
+        duePairIds.push(pairId)
+        return options.due ?? [review(item('item-1', 'reliable')), review(item('item-2', 'steady'))]
+      },
       answer: (userId: string, itemId: string, result: string) => {
         answerCalls.push({ userId, itemId, result })
       },
@@ -76,7 +81,7 @@ function createHarness(options: {
   } as unknown as BotContext)
 
   return {
-    dependencies, handlers, replies, edits, answers, answerCalls, context,
+    dependencies, handlers, replies, edits, answers, answerCalls, duePairIds, context,
     review: async (ctx: BotContext) => handlers.get('command:review')?.[0]?.(ctx),
     callback: async (data: string, session: BotContext['session']) => {
       for (const handler of handlers.get('callback_query') ?? []) await handler(context(data, session), async () => undefined)
@@ -101,6 +106,17 @@ test('/review reports when no due cards exist', async () => {
   await harness.review(harness.context())
 
   assert.deepEqual(harness.replies.map(({ text }) => text), ['Nothing to review right now'])
+})
+
+test('review:start_due starts a pair-scoped review session', async () => {
+  const harness = createHarness()
+  const session: BotContext['session'] = {}
+
+  await harness.callback('review:start_due', session)
+
+  assert.deepEqual(session.review, { itemIds: ['item-1', 'item-2'], index: 0, revealed: false })
+  assert.deepEqual(harness.duePairIds, ['pair-1'])
+  assert.equal(harness.answers.length, 1)
 })
 
 test('show callback uses current session item, reveals it, and acknowledges callback', async () => {

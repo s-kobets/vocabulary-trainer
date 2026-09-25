@@ -99,4 +99,20 @@ export class LanguagePairRepository {
       throw new Error(`Language pair ${pairId} does not belong to user ${userId}`)
     }
   }
+
+  countVocabularyForUserPair(userId: string, pairId: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM vocabulary_items
+      WHERE user_id = ? AND language_pair_id = ?
+    `).get(userId, pairId) as { count: number }
+    return row.count
+  }
+
+  deleteForUser(userId: string, pairId: string): boolean {
+    const result = this.db.prepare(
+      'DELETE FROM language_pairs WHERE user_id = ? AND id = ?',
+    ).run(userId, pairId)
+    return result.changes === 1
+  }
 }

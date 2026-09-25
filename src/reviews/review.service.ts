@@ -22,8 +22,8 @@ export class ReviewService {
     })()
   }
 
-  getDue(userId: string, now: Date, limit: number): DueReview[] {
-    return this.reviews.findDueForUser(userId, now, limit)
+  getDue(userId: string, now: Date, limit: number, languagePairId?: string): DueReview[] {
+    return this.reviews.findDueForUser(userId, now, limit, languagePairId)
   }
 
   answer(userId: string, itemId: string, result: ReviewResult, now: Date): ReviewOutcome {

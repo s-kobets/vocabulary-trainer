@@ -58,6 +58,23 @@ test('learns only current user inbox items and is idempotent', () => {
   db.close()
 })
 
+test('filters due reviews by language pair when requested', () => {
+  const { db, vocabulary, service } = createReviews()
+  db.prepare('INSERT INTO language_pairs (id, user_id, source_language, target_language, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run('pair-c', 'user-a', 'de', 'ru', new Date().toISOString())
+  const first = createItem(vocabulary, 'user-a', 'alpha')
+  const second = vocabulary.create({
+    userId: 'user-a', languagePairId: 'pair-c', text: 'beta', normalizedText: 'beta',
+    itemType: 'word', translations: ['beta'], examples: [], status: 'inbox',
+  })
+  const now = new Date('2026-09-18T12:00:00.000Z')
+  service.startLearning('user-a', now)
+
+  assert.deepEqual(service.getDue('user-a', now, 10, 'pair-a').map(({ item }) => item.id), [first.id])
+  assert.deepEqual(service.getDue('user-a', now, 10, 'pair-c').map(({ item }) => item.id), [second.id])
+  db.close()
+})
+
 test('answers atomically update scoped state and preserve source-to-target history', () => {
   const { db, vocabulary, reviews, service } = createReviews()
   const item = createItem(vocabulary, 'user-a', 'alpha')

@@ -197,3 +197,29 @@ test('finds vocabulary only for the requested user', async () => {
   assert.equal(service.findForUser('user-b', result.item.id), null)
   db.close()
 })
+
+test('deletes normalized text only from the requested user and pair with review cascades', async () => {
+  const { db, repository } = createVocabulary()
+  const service = new VocabularyService(repository, new RecordingDictionaryProvider())
+  const target = await service.addText('user-a', createPair(), 'Reliable')
+  const otherPair = await service.addText('user-a', createPair({ id: 'pair-b', isDefault: false }), 'Reliable')
+
+  db.prepare(`
+    INSERT INTO review_states (id, user_id, vocabulary_item_id, next_review_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run('state-1', 'user-a', target.item.id, '2026-09-20T00:00:00.000Z', '2026-09-19T00:00:00.000Z', '2026-09-19T00:00:00.000Z')
+  db.prepare(`
+    INSERT INTO reviews
+      (id, user_id, vocabulary_item_id, direction, result, level_before, level_after, reviewed_at)
+    VALUES (?, ?, ?, 'source_to_target', 'correct', 0, 1, ?)
+  `).run('review-1', 'user-a', target.item.id, '2026-09-19T00:00:00.000Z')
+
+  assert.equal(service.deleteText('user-a', 'pair-a', '  RELIABLE  '), true)
+  assert.equal(repository.findByIdForUser('user-a', target.item.id), null)
+  assert.ok(repository.findByIdForUser('user-a', otherPair.item.id))
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM review_states WHERE vocabulary_item_id = ?').get(target.item.id) as { count: number }).count, 0)
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM reviews WHERE vocabulary_item_id = ?').get(target.item.id) as { count: number }).count, 0)
+  assert.equal(service.deleteText('user-a', 'pair-a', 'missing'), false)
+  assert.equal(service.deleteText('user-b', 'pair-a', 'reliable'), false)
+  db.close()
+})

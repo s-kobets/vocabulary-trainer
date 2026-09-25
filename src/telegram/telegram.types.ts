@@ -15,6 +15,15 @@ export type BotSession = {
     index: number
     revealed: boolean
   }
+  languageSetup?: {
+    step: 'source' | 'target'
+    sourceLanguage?: string
+  }
+  pendingDelete?: {
+    userId: string
+    languagePairId: string
+    words: string[]
+  }
 }
 
 export type BotContext = Context & SessionContext<BotSession>
