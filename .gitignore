@@ -3,6 +3,9 @@ dist/
 .env
 data/
 backups/
+*.db
+*.db-wal
+*.db-shm
 .serena
 .superpowers
 docs

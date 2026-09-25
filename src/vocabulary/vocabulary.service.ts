@@ -7,6 +7,7 @@ import type { VocabularyItem, VocabularyStatus } from './vocabulary.types'
 export type AddVocabularyResult = {
   item: VocabularyItem
   duplicate: boolean
+  pending?: boolean
 }
 
 export class VocabularyService {
@@ -26,24 +27,38 @@ export class VocabularyService {
       return { item: existing, duplicate: true }
     }
 
-    const dictionaryResult = await this.dictionaryProvider.lookup({
-      text: normalizedText,
-      sourceLanguage: pair.sourceLanguage,
-      targetLanguage: pair.targetLanguage,
-    })
-    const item = this.repository.create({
+    let item = this.repository.create({
       userId,
       languagePairId: pair.id,
       text: normalizedText,
       normalizedText,
       itemType: classifyText(normalizedText),
-      translations: dictionaryResult.translations,
-      transcription: dictionaryResult.transcription,
-      partOfSpeech: dictionaryResult.partOfSpeech,
-      examples: dictionaryResult.examples ?? [],
+      translations: [],
+      examples: [],
       status: 'inbox',
+      enrichmentStatus: 'pending',
     })
-    return { item, duplicate: false }
+    try {
+      const dictionaryResult = await this.dictionaryProvider.lookup({
+        text: normalizedText,
+        sourceLanguage: pair.sourceLanguage,
+        targetLanguage: pair.targetLanguage,
+      })
+      item = this.repository.updateEnrichment(userId, item.id, {
+        ...dictionaryResult,
+        examples: dictionaryResult.examples ?? [],
+        status: 'ready',
+      }) ?? item
+      return { item, duplicate: false }
+    } catch (error) {
+      item = this.repository.updateEnrichment(userId, item.id, {
+        translations: [],
+        examples: [],
+        status: 'pending',
+        error: error instanceof Error ? error.name : 'ProviderError',
+      }) ?? item
+      return { item, duplicate: false, pending: true }
+    }
   }
 
   findForUser(userId: string, itemId: string): VocabularyItem | null {

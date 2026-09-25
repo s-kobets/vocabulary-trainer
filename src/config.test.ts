@@ -28,6 +28,8 @@ test('loadConfig parses explicit values and preserves optional web settings', ()
     TELEGRAM_BOT_TOKEN: 'token',
     APP_URL: 'http://localhost:4310',
     SESSION_SECRET: 'secret',
+    OPENAI_API_KEY: 'openai-key',
+    OPENAI_MODEL: 'gpt-test',
   })
 
   assert.deepEqual(config, {
@@ -37,5 +39,7 @@ test('loadConfig parses explicit values and preserves optional web settings', ()
     telegramBotToken: 'token',
     appUrl: 'http://localhost:4310',
     sessionSecret: 'secret',
+    openAiApiKey: 'openai-key',
+    openAiModel: 'gpt-test',
   })
 })
