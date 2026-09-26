@@ -44,8 +44,10 @@ export async function start(): Promise<void> {
   let enrichmentWorker: EnrichmentWorker | undefined
   let cleanupStarted = false
   let shutdownPromise: Promise<void> | undefined
+  let httpStarted = false
+  let telegramLaunchFailure: unknown
 
-  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+  const shutdown = async (signal: string): Promise<void> => {
     app?.log.info({ signal }, 'Shutdown started')
     await cleanup(signal)
     app?.log.info({ signal }, 'Shutdown complete')
@@ -120,27 +122,39 @@ export async function start(): Promise<void> {
     process.once('SIGTERM', sigtermHandler)
 
     app.log.info({ phase: 'telegram', port: config.port }, 'Starting Telegram bot')
-    await bot.launch()
-    if (cleanupStarted) {
-      if (shutdownPromise) await shutdownPromise
-      return
-    }
-    try {
-      await registerCommandMenu(bot)
-    } catch (error) {
-      app.log.warn({ errorType: error instanceof Error ? 'Error' : typeof error }, 'Telegram command menu registration failed')
-    }
+    void bot.launch(() => {
+      if (cleanupStarted) return
+      app?.log.info({ phase: 'telegram' }, 'Telegram API connection verified')
+      void registerCommandMenu(bot!).catch((error: unknown) => {
+        app?.log.warn(
+          { phase: 'telegram', ...errorMetadata(error, [config.telegramBotToken, config.sessionSecret]) },
+          'Telegram command menu registration failed',
+        )
+      })
+    }).catch((error: unknown) => {
+      telegramLaunchFailure = error
+      if (httpStarted) {
+        app?.log.error(
+          { phase: 'telegram', ...errorMetadata(error, [config.telegramBotToken, config.sessionSecret]) },
+          'Telegram bot launch failed',
+        )
+        process.exitCode = 1
+        void shutdown('Telegram launch failed')
+      }
+    })
     enrichmentWorker.start()
     if (cleanupStarted) {
       if (shutdownPromise) await shutdownPromise
       return
     }
     await app.listen({ port: config.port, host: '0.0.0.0' })
+    httpStarted = true
+    if (telegramLaunchFailure) throw telegramLaunchFailure
     if (cleanupStarted) {
       if (shutdownPromise) await shutdownPromise
       return
     }
-    app.log.info({ phase: 'startup', port: config.port }, 'Telegram bot and HTTP server started')
+    app.log.info({ phase: 'startup', port: config.port }, 'HTTP server started')
   } catch (error) {
     if (shutdownPromise) {
       await shutdownPromise
