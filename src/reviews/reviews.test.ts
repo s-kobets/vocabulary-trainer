@@ -44,8 +44,8 @@ test('learns only current user inbox items and is idempotent', () => {
   const itemB = createItem(vocabulary, 'user-b', 'bravo')
   const now = new Date('2026-09-18T12:00:00.000Z')
 
-  assert.equal(service.startLearning('user-a', now), 1)
-  assert.equal(service.startLearning('user-a', now), 0)
+  assert.equal(service.startLearning('user-a', 'pair-a', now), 1)
+  assert.equal(service.startLearning('user-a', 'pair-a', now), 0)
   assert.equal(vocabulary.findByIdForUser('user-a', itemA.id)?.status, 'learning')
   assert.equal(vocabulary.findByIdForUser('user-b', itemB.id)?.status, 'inbox')
   assert.equal(reviews.countDue('user-a', now), 1)
@@ -55,6 +55,24 @@ test('learns only current user inbox items and is idempotent', () => {
   assert.equal(due[0]?.item.id, itemA.id)
   assert.equal(reviews.getState('user-a', itemA.id)?.level, 0)
   assert.equal(reviews.getState('user-b', itemA.id), null)
+  db.close()
+})
+
+test('learns inbox items only for the requested language pair', () => {
+  const { db, vocabulary, reviews, service } = createReviews()
+  const pairAItem = createItem(vocabulary, 'user-a', 'alpha')
+  const now = new Date('2026-09-18T12:00:00.000Z')
+  db.prepare('INSERT INTO language_pairs (id, user_id, source_language, target_language, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run('pair-c', 'user-a', 'de', 'ru', now.toISOString())
+  const pairCItem = vocabulary.create({
+    userId: 'user-a', languagePairId: 'pair-c', text: 'beta', normalizedText: 'beta',
+    itemType: 'word', translations: ['beta'], examples: [], status: 'inbox',
+  })
+
+  assert.equal(service.startLearning('user-a', 'pair-a', now), 1)
+  assert.equal(vocabulary.findByIdForUser('user-a', pairAItem.id)?.status, 'learning')
+  assert.equal(vocabulary.findByIdForUser('user-a', pairCItem.id)?.status, 'inbox')
+  assert.equal(reviews.getState('user-a', pairCItem.id), null)
   db.close()
 })
 
@@ -68,7 +86,8 @@ test('filters due reviews by language pair when requested', () => {
     itemType: 'word', translations: ['beta'], examples: [], status: 'inbox',
   })
   const now = new Date('2026-09-18T12:00:00.000Z')
-  service.startLearning('user-a', now)
+  service.startLearning('user-a', 'pair-a', now)
+  service.startLearning('user-a', 'pair-c', now)
 
   assert.deepEqual(service.getDue('user-a', now, 10, 'pair-a').map(({ item }) => item.id), [first.id])
   assert.deepEqual(service.getDue('user-a', now, 10, 'pair-c').map(({ item }) => item.id), [second.id])
@@ -79,7 +98,7 @@ test('answers atomically update scoped state and preserve source-to-target histo
   const { db, vocabulary, reviews, service } = createReviews()
   const item = createItem(vocabulary, 'user-a', 'alpha')
   const now = new Date('2026-09-18T12:00:00.000Z')
-  service.startLearning('user-a', now)
+  service.startLearning('user-a', 'pair-a', now)
 
   const outcome = service.answer('user-a', item.id, 'correct', now)
 
@@ -105,7 +124,7 @@ test('rejects another user and transitions known items at level six', () => {
   const itemA = createItem(vocabulary, 'user-a', 'alpha')
   const itemB = createItem(vocabulary, 'user-b', 'bravo')
   const now = new Date('2026-09-18T12:00:00.000Z')
-  service.startLearning('user-a', now)
+  service.startLearning('user-a', 'pair-a', now)
   assert.throws(() => service.answer('user-b', itemA.id, 'correct', now), /Review item is not available/)
 
   reviews.updateState('user-a', itemA.id, {
@@ -132,7 +151,7 @@ test('orders due reviews and counts UTC review day bounds', () => {
   const first = createItem(vocabulary, 'user-a', 'first')
   const second = createItem(vocabulary, 'user-a', 'second')
   const now = new Date('2026-09-18T23:30:00.000Z')
-  service.startLearning('user-a', now)
+  service.startLearning('user-a', 'pair-a', now)
   reviews.updateState('user-a', first.id, { level: 0, nextReviewAt: '2026-09-18T10:00:00.000Z' })
   reviews.updateState('user-a', second.id, { level: 0, nextReviewAt: '2026-09-18T11:00:00.000Z' })
   reviews.createReview('user-a', first.id, {

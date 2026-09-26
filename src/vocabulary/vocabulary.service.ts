@@ -79,7 +79,7 @@ export class VocabularyService {
     return this.repository.listForUser(userId, filters)
   }
 
-  countByStatus(userId: string, status: VocabularyStatus): number {
-    return this.repository.countByStatus(userId, status)
+  countByStatus(userId: string, status: VocabularyStatus, languagePairId?: string): number {
+    return this.repository.countByStatus(userId, status, languagePairId)
   }
 }

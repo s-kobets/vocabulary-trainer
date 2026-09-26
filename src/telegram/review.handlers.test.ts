@@ -98,6 +98,7 @@ test('/review creates an in-memory session and renders first source card', async
   assert.deepEqual(context.session?.review, { itemIds: ['item-1', 'item-2'], index: 0, revealed: false })
   assert.match(harness.replies[0].text, /1 \/ 2.*reliable/s)
   assert.match(JSON.stringify(harness.replies[0].extra), /review:show:item-1/)
+  assert.deepEqual(harness.duePairIds, [pair.id])
 })
 
 test('/review reports when no due cards exist', async () => {

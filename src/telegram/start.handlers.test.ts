@@ -121,7 +121,7 @@ test('foreign and missing callback data are forwarded by onboarding middleware',
 
 test('bot error logging contains only safe metadata', async () => {
   const logs: unknown[][] = []
-  const dependencies = createHarness().dependencies
+  const dependencies = createHarness(pair).dependencies
   dependencies.logger.error = (...args: unknown[]) => logs.push(args)
   const bot = createBot('bot-token', dependencies)
   const handleError = (bot as unknown as {
@@ -148,7 +148,7 @@ test('bot error logging contains only safe metadata', async () => {
 test('composed bot forwards inbox callbacks past onboarding middleware', async () => {
   let startLearningCalls = 0
   let callbackAnswers = 0
-  const dependencies = createHarness().dependencies
+  const dependencies = createHarness(pair).dependencies
   dependencies.vocabularyService = {
     listForUser: () => [],
     countByStatus: () => 0,
@@ -172,7 +172,7 @@ test('composed bot forwards inbox callbacks past onboarding middleware', async (
         text: 'Inbox: 1',
       },
       chat_instance: '42',
-      data: 'inbox:learn_all',
+      data: `inbox:learn_all:${pair.id}`,
     },
   })
 

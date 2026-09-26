@@ -80,10 +80,18 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       return
     }
 
-    const items = dependencies.vocabularyService.listForUser(user.id, { status: 'inbox', limit: 10 })
-    const count = dependencies.vocabularyService.countByStatus(user.id, 'inbox')
+    const pair = dependencies.languagePairService.findDefaultForUser(user.id)
+    if (!pair) {
+      await ctx.reply('Choose your languages with /start first')
+      return
+    }
+
+    const items = dependencies.vocabularyService.listForUser(user.id, {
+      status: 'inbox', languagePairId: pair.id, limit: 10,
+    })
+    const count = dependencies.vocabularyService.countByStatus(user.id, 'inbox', pair.id)
     await ctx.reply(renderInbox(items, count), Markup.inlineKeyboard([
-      [Markup.button.callback('Learn all', 'inbox:learn_all')],
+      [Markup.button.callback('Learn all', `inbox:learn_all:${pair.id}`)],
     ]))
   })
 
@@ -102,7 +110,7 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
     const items = dependencies.vocabularyService.listForUser(user.id, {
       status: 'learning', languagePairId: pair.id, limit: 10,
     })
-    const count = dependencies.vocabularyService.countByStatus(user.id, 'learning')
+    const count = dependencies.vocabularyService.countByStatus(user.id, 'learning', pair.id)
     if (count === 0) {
       await ctx.reply('Learning list is empty')
       return
@@ -151,6 +159,14 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
     }
 
     const data = ctx.callbackQuery.data
+    if (data === 'inbox:learn_all') {
+      try {
+        await ctx.reply('This request expired. Please open /inbox again.')
+      } finally {
+        await ctx.answerCbQuery()
+      }
+      return
+    }
     if (data === 'vocabulary:delete:cancel' || data === 'vocabulary:delete:confirm') {
       try {
         const pending = ctx.session?.pendingDelete
@@ -195,7 +211,8 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       return
     }
 
-    if (data !== 'inbox:learn_all') {
+    const learnAllMatch = /^inbox:learn_all:([^:]+)$/.exec(data)
+    if (!learnAllMatch) {
       await next()
       await ctx.answerCbQuery()
       return
@@ -208,7 +225,13 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
         return
       }
 
-      const moved = dependencies.reviewService.startLearning(user.id, new Date())
+      const pair = dependencies.languagePairService.findDefaultForUser(user.id)
+      if (!pair || pair.id !== learnAllMatch[1]) {
+        await ctx.reply('This request expired. Please open /inbox again.')
+        return
+      }
+
+      const moved = dependencies.reviewService.startLearning(user.id, pair.id, new Date())
       await ctx.reply(`Moved ${moved} item${moved === 1 ? '' : 's'} to learning.`)
     } finally {
       await ctx.answerCbQuery()

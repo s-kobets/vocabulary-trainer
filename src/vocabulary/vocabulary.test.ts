@@ -88,6 +88,20 @@ test('maps JSON fields and supports pair-scoped duplicates', () => {
   db.close()
 })
 
+test('counts and lists vocabulary within the requested language pair', () => {
+  const { db, repository } = createVocabulary()
+  const first = repository.create(createInput())
+  repository.create(createInput({ languagePairId: 'pair-b', text: 'reliable', normalizedText: 'reliable' }))
+
+  assert.equal(repository.countByStatus('user-a', 'inbox', 'pair-a'), 1)
+  assert.equal(repository.countByStatus('user-a', 'inbox', 'pair-b'), 1)
+  assert.deepEqual(
+    repository.listForUser('user-a', { status: 'inbox', languagePairId: 'pair-a' }).map(({ id }) => id),
+    [first.id],
+  )
+  db.close()
+})
+
 test('updates supported fields, lists, searches, and counts by status', () => {
   const { db, repository } = createVocabulary()
   const item = repository.create(createInput())

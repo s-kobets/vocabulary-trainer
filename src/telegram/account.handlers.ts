@@ -25,9 +25,9 @@ export function registerAccountHandlers(
     }
 
     await ctx.reply(renderStatus(pair, {
-      inbox: dependencies.vocabularyService.countByStatus(user.id, 'inbox'),
-      learning: dependencies.vocabularyService.countByStatus(user.id, 'learning'),
-      known: dependencies.vocabularyService.countByStatus(user.id, 'known'),
+      inbox: dependencies.vocabularyService.countByStatus(user.id, 'inbox', pair.id),
+      learning: dependencies.vocabularyService.countByStatus(user.id, 'learning', pair.id),
+      known: dependencies.vocabularyService.countByStatus(user.id, 'known', pair.id),
     }))
   })
 }

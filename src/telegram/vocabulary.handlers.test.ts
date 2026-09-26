@@ -28,7 +28,7 @@ function createHarness(options: {
   inboxCount?: number
   learningItems?: VocabularyItem[]
   learningCount?: number
-  startLearning?: () => number
+  startLearning?: (...args: unknown[]) => number
   deleteText?: (userId: string, pairId: string, text: string) => boolean
   activePair?: LanguagePair | null
 } = {}) {
@@ -36,6 +36,9 @@ function createHarness(options: {
   const replies: Array<{ text: string; extra?: unknown }> = []
   let callbackAnswers = 0
   const loggerCalls: unknown[][] = []
+  const listFilters: Array<{ status?: string; languagePairId?: string; limit?: number } | undefined> = []
+  const countCalls: unknown[][] = []
+  const learningCalls: unknown[][] = []
   const dependencies = {
     userService: {
       findByTelegramUserId: () => options.currentUser === undefined ? user : options.currentUser,
@@ -43,17 +46,23 @@ function createHarness(options: {
     languagePairService: { findDefaultForUser: () => options.activePair ?? (options.defaultPair === undefined ? pair : options.defaultPair) },
     vocabularyService: {
       addText: options.addText ?? (async () => ({ item, duplicate: false })),
-      listForUser: (_userId: string, filters?: { status?: string }) => filters?.status === 'learning'
-        ? options.learningItems ?? [item]
-        : options.inboxItems ?? [item],
-      countByStatus: (_userId: string, status?: string) => status === 'learning'
-        ? options.learningCount ?? 1
-        : options.inboxCount ?? 1,
+      listForUser: (_userId: string, filters?: { status?: string; languagePairId?: string; limit?: number }) => {
+        listFilters.push(filters)
+        return filters?.status === 'learning' ? options.learningItems ?? [item] : options.inboxItems ?? [item]
+      },
+      countByStatus: (...args: unknown[]) => {
+        countCalls.push(args)
+        const status = args[1]
+        return status === 'learning' ? options.learningCount ?? 1 : options.inboxCount ?? 1
+      },
       deleteText: options.deleteText ?? (() => false),
       delete: () => false,
       findForUser: () => item,
     },
-    reviewService: { startLearning: options.startLearning ?? (() => 1) },
+    reviewService: { startLearning: (...args: unknown[]) => {
+      learningCalls.push(args)
+      return options.startLearning?.(...args) ?? 1
+    } },
     logger: { error: (...args: unknown[]) => loggerCalls.push(args) },
   } as unknown as BotDependencies
   const bot = {
@@ -71,12 +80,13 @@ function createHarness(options: {
   } as unknown as BotContext)
 
   return {
-    dependencies, handlers, replies, loggerCalls,
+    dependencies, handlers, replies, loggerCalls, listFilters, countCalls, learningCalls,
     context, callbackAnswers: () => callbackAnswers,
     text: async (message: string) => {
       for (const handler of handlers.get('text') ?? []) await handler(context(message), async () => undefined)
     },
     inbox: async () => handlers.get('command:inbox')?.[0]?.(context('/inbox')),
+    learning: async () => handlers.get('command:learning')?.[0]?.(context('/learning')),
     delete: async (message: string, session: BotContext['session'] = {}) => {
       const ctx = context(message)
       ctx.session = session
@@ -149,7 +159,7 @@ test('/inbox renders count, item text, and Learn all callback', async () => {
 
   assert.match(harness.replies[0].text, /Inbox: 3.*reliable/s)
   assert.match(JSON.stringify(harness.replies[0].extra), /Learn all/)
-  assert.match(JSON.stringify(harness.replies[0].extra), /inbox:learn_all/)
+  assert.match(JSON.stringify(harness.replies[0].extra), new RegExp(`inbox:learn_all:${pair.id}`))
   assert.doesNotMatch(JSON.stringify(harness.replies[0].extra), /vocabulary:delete:item:/)
 })
 
@@ -163,19 +173,60 @@ test('/inbox passes newest-item ordering request to vocabulary service', async (
 
   await harness.inbox()
 
-  assert.deepEqual(receivedFilters, { status: 'inbox', limit: 10 })
+  assert.deepEqual(receivedFilters, { status: 'inbox', languagePairId: pair.id, limit: 10 })
+})
+
+test('/inbox lists and counts only the active language pair', async () => {
+  const harness = createHarness()
+
+  await harness.inbox()
+
+  assert.deepEqual(harness.listFilters[0], { status: 'inbox', languagePairId: pair.id, limit: 10 })
+  assert.deepEqual(harness.countCalls[0], [user.id, 'inbox', pair.id])
+  assert.match(JSON.stringify(harness.replies[0].extra), new RegExp(`inbox:learn_all:${pair.id}`))
+})
+
+test('/learning counts only the active language pair', async () => {
+  const harness = createHarness()
+
+  await harness.learning()
+
+  assert.deepEqual(harness.listFilters[0], { status: 'learning', languagePairId: pair.id, limit: 10 })
+  assert.deepEqual(harness.countCalls[0], [user.id, 'learning', pair.id])
 })
 
 test('Learn all acknowledges callback and is idempotent through service result', async () => {
   let calls = 0
   const harness = createHarness({ startLearning: () => { calls++; return calls === 1 ? 2 : 0 } })
-  await harness.callback('inbox:learn_all')
-  await harness.callback('inbox:learn_all')
+  await harness.callback(`inbox:learn_all:${pair.id}`)
+  await harness.callback(`inbox:learn_all:${pair.id}`)
 
   assert.equal(calls, 2)
   assert.equal(harness.callbackAnswers(), 2)
   assert.match(harness.replies[0].text, /2/)
   assert.match(harness.replies[1].text, /0/)
+  assert.deepEqual(harness.learningCalls, [[user.id, pair.id, harness.learningCalls[0][2]], [user.id, pair.id, harness.learningCalls[1][2]]])
+})
+
+test('stale Learn all callback is rejected after switching active pairs', async () => {
+  const otherPair = { ...pair, id: 'pair-2', sourceLanguage: 'de' }
+  const harness = createHarness({ activePair: otherPair })
+
+  await harness.callback(`inbox:learn_all:${pair.id}`)
+
+  assert.deepEqual(harness.learningCalls, [])
+  assert.equal(harness.replies[0].text, 'This request expired. Please open /inbox again.')
+  assert.equal(harness.callbackAnswers(), 1)
+})
+
+test('legacy Learn all callback is rejected without a pair ID', async () => {
+  const harness = createHarness()
+
+  await harness.callback('inbox:learn_all')
+
+  assert.deepEqual(harness.learningCalls, [])
+  assert.equal(harness.replies[0].text, 'This request expired. Please open /inbox again.')
+  assert.equal(harness.callbackAnswers(), 1)
 })
 
 test('callback middleware forwards callbacks owned by other handlers', async () => {

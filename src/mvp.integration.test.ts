@@ -45,7 +45,7 @@ test('runs Telegram MVP service flow with user-scoped state', async () => {
     assert.equal(duplicate.duplicate, true)
     assert.equal(vocabularyService.listForUser(user.id).length, 1)
 
-    assert.equal(reviewService.startLearning(user.id, fixedNow), 1)
+    assert.equal(reviewService.startLearning(user.id, pair.id, fixedNow), 1)
     assert.equal(reviewService.getDue(user.id, fixedNow, 10).length, 1)
 
     reviewService.answer(user.id, first.item.id, 'correct', fixedNow)

@@ -39,7 +39,7 @@ async function expire(ctx: BotContext): Promise<void> {
 }
 
 export function registerReviewHandlers(bot: Telegraf<BotContext>, dependencies: BotDependencies): void {
-  const startReview = async (ctx: BotContext, languagePairId?: string): Promise<void> => {
+  const startReview = async (ctx: BotContext, languagePairId: string): Promise<void> => {
     const user = getCurrentUser(ctx, dependencies.userService)
     if (!user) {
       await ctx.reply('Please send /start first')
@@ -62,7 +62,17 @@ export function registerReviewHandlers(bot: Telegraf<BotContext>, dependencies: 
   }
 
   bot.command('review', async (ctx) => {
-    await startReview(ctx)
+    const user = getCurrentUser(ctx, dependencies.userService)
+    if (!user) {
+      await ctx.reply('Please send /start first')
+      return
+    }
+    const pair = dependencies.languagePairService.findDefaultForUser(user.id)
+    if (!pair) {
+      await ctx.reply('Choose your languages with /start first')
+      return
+    }
+    await startReview(ctx, pair.id)
   })
 
   bot.on('callback_query', async (ctx, next) => {

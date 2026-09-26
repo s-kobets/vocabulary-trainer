@@ -16,10 +16,14 @@ const pair: LanguagePair = {
 function createHarness(currentUser: typeof user | null, currentPair: LanguagePair | null) {
   const commands = new Map<string, Handler>()
   const replies: string[] = []
+  const countCalls: unknown[][] = []
   const dependencies = {
     userService: { findByTelegramUserId: () => currentUser },
     languagePairService: { findDefaultForUser: () => currentPair },
-    vocabularyService: { countByStatus: (_userId: string, status: string) => ({ inbox: 2, learning: 3, known: 4 }[status as 'inbox' | 'learning' | 'known']) },
+    vocabularyService: { countByStatus: (...args: unknown[]) => {
+      countCalls.push(args)
+      return ({ inbox: 2, learning: 3, known: 4 }[args[1] as 'inbox' | 'learning' | 'known'])
+    } },
     reviewService: {},
     logger: { error: () => undefined },
   } as unknown as BotDependencies
@@ -31,7 +35,7 @@ function createHarness(currentUser: typeof user | null, currentPair: LanguagePai
   return {
     command: (name: string) => commands.get(name)!,
     context: { from: { id: 42 }, reply: async (text: string) => { replies.push(text) } } as unknown as BotContext,
-    replies,
+    replies, countCalls,
   }
 }
 
@@ -60,4 +64,9 @@ test('/status reports the active pair and all vocabulary counts', async () => {
 
   assert.match(harness.replies[0], /English.*Russian/s)
   assert.match(harness.replies[0], /Inbox: 2.*Learning: 3.*Known: 4/s)
+  assert.deepEqual(harness.countCalls, [
+    [user.id, 'inbox', pair.id],
+    [user.id, 'learning', pair.id],
+    [user.id, 'known', pair.id],
+  ])
 })

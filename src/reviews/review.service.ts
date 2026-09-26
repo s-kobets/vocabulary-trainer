@@ -11,9 +11,9 @@ export class ReviewService {
     private readonly vocabulary: VocabularyRepository,
   ) {}
 
-  startLearning(userId: string, now: Date): number {
+  startLearning(userId: string, languagePairId: string, now: Date): number {
     return this.db.transaction(() => {
-      const items = this.vocabulary.listForUser(userId, { status: 'inbox' })
+      const items = this.vocabulary.listForUser(userId, { status: 'inbox', languagePairId })
       for (const item of items) {
         this.vocabulary.update(userId, item.id, { status: 'learning' })
         this.reviews.createState(userId, item.id, now)

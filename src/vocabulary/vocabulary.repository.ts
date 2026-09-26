@@ -243,10 +243,15 @@ export class VocabularyRepository {
     return result.changes === 1
   }
 
-  countByStatus(userId: string, status: VocabularyStatus): number {
+  countByStatus(userId: string, status: VocabularyStatus, languagePairId?: string): number {
+    const pairCondition = languagePairId === undefined ? '' : ' AND language_pair_id = ?'
+    const parameters = languagePairId === undefined
+      ? [userId, status]
+      : [userId, status, languagePairId]
     const row = this.db.prepare(`
-      SELECT COUNT(*) AS count FROM vocabulary_items WHERE user_id = ? AND status = ?
-    `).get(userId, status) as { count: number }
+      SELECT COUNT(*) AS count FROM vocabulary_items
+      WHERE user_id = ? AND status = ?${pairCondition}
+    `).get(...parameters) as { count: number }
     return row.count
   }
 
