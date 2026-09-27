@@ -282,7 +282,7 @@ test('Inbox edit action binds the pending edit to its item and source message', 
   const harness = createHarness()
   const session: BotContext['session'] = {}
 
-  await harness.callback(`inbox:edit:${pair.id}:${item.id}`, session)
+  await harness.callback(`inbox:edit:${item.id}`, session)
 
   assert.deepEqual(session.pendingTranslationEdit, {
     userId: user.id,
@@ -310,7 +310,7 @@ test('saving an Inbox edit refreshes the original message with updated translati
   assert.equal(session.pendingTranslationEdit, undefined)
   assert.deepEqual(harness.telegramEdits[0].slice(0, 3), [88, 77, undefined])
   assert.match(String(harness.telegramEdits[0][3]), /reliable -> примерный, приблизительный/)
-  assert.match(JSON.stringify(harness.telegramEdits[0][4]), /inbox:learn:pair-1:item-1/)
+  assert.match(JSON.stringify(harness.telegramEdits[0][4]), /inbox:learn:item-1/)
   assert.equal(harness.replies.length, 0)
 })
 
@@ -340,7 +340,7 @@ test('a moved Inbox item expires its pending Inbox edit without saving', async (
 })
 
 test('Inbox edits block individual and bulk moves until translation input is finished', async () => {
-  for (const callback of [`inbox:learn:${pair.id}:${item.id}`, `inbox:learn_all:${pair.id}`]) {
+  for (const callback of [`inbox:learn:${item.id}`, `inbox:learn_all:${pair.id}`]) {
     const harness = createHarness()
     const session: BotContext['session'] = {
       pendingTranslationEdit: {
@@ -371,7 +371,7 @@ test('Inbox edit callback rejects missing, foreign-pair, and non-Inbox items', a
     const harness = createHarness(options)
     const session: BotContext['session'] = {}
 
-    await harness.callback(`inbox:edit:${pair.id}:${item.id}`, session)
+    await harness.callback(`inbox:edit:${item.id}`, session)
 
     assert.equal(session.pendingTranslationEdit, undefined)
     assert.match(harness.replies.at(-1)?.text ?? '', /no longer available/i)
@@ -481,8 +481,8 @@ test('/inbox renders bilingual items and per-item and bulk actions', async () =>
   const keyboard = JSON.stringify(harness.replies[0].extra)
   assert.match(keyboard, /Edit translation/)
   assert.match(keyboard, /Move to Learning/)
-  assert.match(keyboard, new RegExp(`inbox:edit:${pair.id}:${item.id}`))
-  assert.match(keyboard, new RegExp(`inbox:learn:${pair.id}:${item.id}`))
+  assert.match(keyboard, new RegExp(`inbox:edit:${item.id}`))
+  assert.match(keyboard, new RegExp(`inbox:learn:${item.id}`))
   assert.match(keyboard, /Learn all/)
   assert.match(keyboard, new RegExp(`inbox:learn_all:${pair.id}`))
   assert.doesNotMatch(JSON.stringify(harness.replies[0].extra), /vocabulary:delete:item:/)
@@ -507,6 +507,11 @@ test('/inbox callback payloads fit Telegram limits with UUID identifiers', async
   const keyboard = JSON.stringify(harness.replies[0].extra)
   const callbackData = [...keyboard.matchAll(/"callback_data":"([^"]+)"/g)].map(([, value]) => value)
   assert.equal(callbackData.length, 3)
+  assert.deepEqual(callbackData, [
+    `inbox:edit:${uuidItem.id}`,
+    `inbox:learn:${uuidItem.id}`,
+    `inbox:learn_all:${uuidPair.id}`,
+  ])
   for (const value of callbackData) {
     assert.ok(Buffer.byteLength(value, 'utf8') <= 64, `${value} exceeds Telegram's 64-byte callback_data limit`)
   }
@@ -516,7 +521,7 @@ test('individual Inbox move creates learning state and refreshes the same messag
   const secondItem = { ...item, id: 'item-2', text: 'steady', normalizedText: 'steady' }
   const harness = createHarness({ inboxItems: [item, secondItem], inboxCount: 2 })
 
-  await harness.callback(`inbox:learn:${pair.id}:${item.id}`)
+  await harness.callback(`inbox:learn:${item.id}`)
 
   assert.equal(harness.singleLearningCalls.length, 1)
   assert.deepEqual(harness.singleLearningCalls[0].slice(0, 3), [user.id, pair.id, item.id])
@@ -537,7 +542,7 @@ test('stale individual Inbox moves are rejected and the view is refreshed', asyn
 
   for (const { options } of cases) {
     const harness = createHarness(options)
-    await harness.callback(`inbox:learn:${pair.id}:${item.id}`)
+    await harness.callback(`inbox:learn:${item.id}`)
 
     assert.equal(harness.singleLearningCalls.length, 0)
     assert.equal(harness.callbackAnswers(), 1)

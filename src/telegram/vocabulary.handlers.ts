@@ -25,8 +25,8 @@ function inboxView(dependencies: BotDependencies, userId: string, pair: Language
   const count = dependencies.vocabularyService.countByStatus(userId, 'inbox', pair.id)
   const extra = count === 0 ? undefined : Markup.inlineKeyboard([
     ...items.map((item: VocabularyItem) => [
-      Markup.button.callback('Edit translation', `inbox:edit:${pair.id}:${item.id}`),
-      Markup.button.callback('Move to Learning', `inbox:learn:${pair.id}:${item.id}`),
+      Markup.button.callback('Edit translation', `inbox:edit:${item.id}`),
+      Markup.button.callback('Move to Learning', `inbox:learn:${item.id}`),
     ]),
     [Markup.button.callback('Learn all', `inbox:learn_all:${pair.id}`)],
   ])
@@ -290,7 +290,7 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       }
       return
     }
-    const editInboxMatch = /^inbox:edit:([^:]+):([^:]+)$/.exec(data)
+    const editInboxMatch = /^inbox:edit:([^:]+)$/.exec(data)
     if (editInboxMatch) {
       try {
         const user = getCurrentUser(ctx, dependencies.userService)
@@ -300,12 +300,12 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
         }
 
         const pair = dependencies.languagePairService.findDefaultForUser(user.id)
-        if (!pair || pair.id !== editInboxMatch[1]) {
+        if (!pair) {
           await ctx.reply('This request expired. Please open /inbox again.')
           return
         }
 
-        const item = dependencies.vocabularyService.findForUser(user.id, editInboxMatch[2])
+        const item = dependencies.vocabularyService.findForUser(user.id, editInboxMatch[1])
         const callbackMessage = 'message' in ctx.callbackQuery ? ctx.callbackQuery.message : undefined
         if (!item || item.userId !== user.id || item.languagePairId !== pair.id || item.status !== 'inbox'
           || !callbackMessage || !('chat' in callbackMessage)) {
@@ -325,7 +325,7 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       }
       return
     }
-    const learnItemMatch = /^inbox:learn:([^:]+):([^:]+)$/.exec(data)
+    const learnItemMatch = /^inbox:learn:([^:]+)$/.exec(data)
     if (learnItemMatch) {
       try {
         const user = getCurrentUser(ctx, dependencies.userService)
@@ -335,28 +335,31 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
         }
 
         const pair = dependencies.languagePairService.findDefaultForUser(user.id)
-        if (!pair || pair.id !== learnItemMatch[1]) {
+        if (!pair) {
           await ctx.reply('This request expired. Please open /inbox again.')
-          if (pair) {
-            try {
-              await refreshInboxMessage(ctx, dependencies, user.id, pair)
-            } catch {
-              // The current Inbox view may no longer be editable.
-            }
-          }
           return
         }
 
         const pendingEdit = ctx.session?.pendingTranslationEdit
         if (pendingEdit?.inboxMessage && pendingEdit.languagePairId === pair.id
-          && pendingEdit.vocabularyItemId === learnItemMatch[2]) {
+          && pendingEdit.vocabularyItemId === learnItemMatch[1]) {
           await ctx.reply('Finish editing the translation first')
           return
         }
 
-        const item = dependencies.vocabularyService.findForUser(user.id, learnItemMatch[2])
-        if (!item || item.userId !== user.id || item.languagePairId !== pair.id || item.status !== 'inbox') {
+        const item = dependencies.vocabularyService.findForUser(user.id, learnItemMatch[1])
+        if (!item || item.userId !== user.id || item.status !== 'inbox') {
           await ctx.reply('This Inbox item is no longer available.')
+          try {
+            await refreshInboxMessage(ctx, dependencies, user.id, pair)
+          } catch {
+            // The current Inbox view may no longer be editable.
+          }
+          return
+        }
+
+        if (item.languagePairId !== pair.id) {
+          await ctx.reply('This request expired. Please open /inbox again.')
           try {
             await refreshInboxMessage(ctx, dependencies, user.id, pair)
           } catch {
