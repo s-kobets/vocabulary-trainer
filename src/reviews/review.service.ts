@@ -22,6 +22,19 @@ export class ReviewService {
     })()
   }
 
+  startLearningItem(userId: string, languagePairId: string, itemId: string, now: Date): boolean {
+    return this.db.transaction(() => {
+      const item = this.vocabulary.findByIdForUser(userId, itemId)
+      if (!item || item.languagePairId !== languagePairId || item.status !== 'inbox') return false
+
+      if (!this.vocabulary.update(userId, item.id, { status: 'learning' })) {
+        throw new Error('Review item is not available')
+      }
+      this.reviews.createState(userId, item.id, now)
+      return true
+    })()
+  }
+
   getDue(userId: string, now: Date, limit: number, languagePairId?: string): DueReview[] {
     return this.reviews.findDueForUser(userId, now, limit, languagePairId)
   }

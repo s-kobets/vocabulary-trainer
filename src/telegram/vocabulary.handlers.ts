@@ -1,6 +1,8 @@
 import { Markup, type Telegraf } from 'telegraf'
 import { getCurrentUser } from './context'
+import type { LanguagePair } from '../languages/language-pair.types'
 import { normalizeText } from '../vocabulary/normalize'
+import type { VocabularyItem } from '../vocabulary/vocabulary.types'
 import {
   renderBulkImportSummary,
   renderDeleteConfirmation,
@@ -16,6 +18,31 @@ import type { BotContext, BotDependencies } from './telegram.types'
 
 const providerFailureMessage = "I couldn't process this word right now.\nPlease try again later."
 
+function inboxView(dependencies: BotDependencies, userId: string, pair: LanguagePair) {
+  const items = dependencies.vocabularyService.listForUser(userId, {
+    status: 'inbox', languagePairId: pair.id, limit: 10,
+  })
+  const count = dependencies.vocabularyService.countByStatus(userId, 'inbox', pair.id)
+  const extra = count === 0 ? undefined : Markup.inlineKeyboard([
+    ...items.map((item: VocabularyItem) => [
+      Markup.button.callback('Edit translation', `inbox:edit:${pair.id}:${item.id}`),
+      Markup.button.callback('Move to Learning', `inbox:learn:${pair.id}:${item.id}`),
+    ]),
+    [Markup.button.callback('Learn all', `inbox:learn_all:${pair.id}`)],
+  ])
+  return { text: renderInbox(items, count, pair), extra }
+}
+
+async function refreshInboxMessage(
+  ctx: BotContext,
+  dependencies: BotDependencies,
+  userId: string,
+  pair: LanguagePair,
+): Promise<void> {
+  const view = inboxView(dependencies, userId, pair)
+  await ctx.editMessageText(view.text, view.extra)
+}
+
 export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependencies: BotDependencies): void {
   bot.on('text', async (ctx, next) => {
     const text = ctx.message.text
@@ -30,7 +57,7 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       const pair = user ? dependencies.languagePairService.findDefaultForUser(user.id) : null
       const item = user ? dependencies.vocabularyService.findForUser(user.id, pendingEdit.vocabularyItemId) : null
       if (!user || !pair || pendingEdit.userId !== user.id || pendingEdit.languagePairId !== pair.id
-        || !item || item.languagePairId !== pair.id) {
+        || !item || item.languagePairId !== pair.id || (pendingEdit.inboxMessage && item.status !== 'inbox')) {
         ctx.session!.pendingTranslationEdit = undefined
         await ctx.reply('Translation edit expired. Please start again with /edit.')
         return
@@ -67,6 +94,19 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
               ],
               [Markup.button.callback('Edit translation', `review:edit:${updated.id}`)],
             ]),
+          )
+        } catch {
+          await ctx.reply(successMessage)
+        }
+      } else if (pendingEdit.inboxMessage) {
+        try {
+          const view = inboxView(dependencies, user.id, pair)
+          await ctx.telegram.editMessageText(
+            pendingEdit.inboxMessage.chatId,
+            pendingEdit.inboxMessage.messageId,
+            undefined,
+            view.text,
+            view.extra,
           )
         } catch {
           await ctx.reply(successMessage)
@@ -174,13 +214,8 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       return
     }
 
-    const items = dependencies.vocabularyService.listForUser(user.id, {
-      status: 'inbox', languagePairId: pair.id, limit: 10,
-    })
-    const count = dependencies.vocabularyService.countByStatus(user.id, 'inbox', pair.id)
-    await ctx.reply(renderInbox(items, count), Markup.inlineKeyboard([
-      [Markup.button.callback('Learn all', `inbox:learn_all:${pair.id}`)],
-    ]))
+    const view = inboxView(dependencies, user.id, pair)
+    await ctx.reply(view.text, view.extra)
   })
 
   bot.command('learning', async (ctx) => {
@@ -255,6 +290,102 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       }
       return
     }
+    const editInboxMatch = /^inbox:edit:([^:]+):([^:]+)$/.exec(data)
+    if (editInboxMatch) {
+      try {
+        const user = getCurrentUser(ctx, dependencies.userService)
+        if (!user) {
+          await ctx.reply('Please send /start first')
+          return
+        }
+
+        const pair = dependencies.languagePairService.findDefaultForUser(user.id)
+        if (!pair || pair.id !== editInboxMatch[1]) {
+          await ctx.reply('This request expired. Please open /inbox again.')
+          return
+        }
+
+        const item = dependencies.vocabularyService.findForUser(user.id, editInboxMatch[2])
+        const callbackMessage = 'message' in ctx.callbackQuery ? ctx.callbackQuery.message : undefined
+        if (!item || item.userId !== user.id || item.languagePairId !== pair.id || item.status !== 'inbox'
+          || !callbackMessage || !('chat' in callbackMessage)) {
+          await ctx.reply('This Inbox item is no longer available.')
+          return
+        }
+
+        ctx.session!.pendingTranslationEdit = {
+          userId: user.id,
+          vocabularyItemId: item.id,
+          languagePairId: pair.id,
+          inboxMessage: { chatId: callbackMessage.chat.id, messageId: callbackMessage.message_id },
+        }
+        await ctx.reply(`Send replacement translations for ${item.text}, one per line:`)
+      } finally {
+        await ctx.answerCbQuery()
+      }
+      return
+    }
+    const learnItemMatch = /^inbox:learn:([^:]+):([^:]+)$/.exec(data)
+    if (learnItemMatch) {
+      try {
+        const user = getCurrentUser(ctx, dependencies.userService)
+        if (!user) {
+          await ctx.reply('Please send /start first')
+          return
+        }
+
+        const pair = dependencies.languagePairService.findDefaultForUser(user.id)
+        if (!pair || pair.id !== learnItemMatch[1]) {
+          await ctx.reply('This request expired. Please open /inbox again.')
+          if (pair) {
+            try {
+              await refreshInboxMessage(ctx, dependencies, user.id, pair)
+            } catch {
+              // The current Inbox view may no longer be editable.
+            }
+          }
+          return
+        }
+
+        const pendingEdit = ctx.session?.pendingTranslationEdit
+        if (pendingEdit?.inboxMessage && pendingEdit.languagePairId === pair.id
+          && pendingEdit.vocabularyItemId === learnItemMatch[2]) {
+          await ctx.reply('Finish editing the translation first')
+          return
+        }
+
+        const item = dependencies.vocabularyService.findForUser(user.id, learnItemMatch[2])
+        if (!item || item.userId !== user.id || item.languagePairId !== pair.id || item.status !== 'inbox') {
+          await ctx.reply('This Inbox item is no longer available.')
+          try {
+            await refreshInboxMessage(ctx, dependencies, user.id, pair)
+          } catch {
+            // The current Inbox view may no longer be editable.
+          }
+          return
+        }
+
+        const moved = dependencies.reviewService.startLearningItem(user.id, pair.id, item.id, new Date())
+        if (!moved) {
+          await ctx.reply('This Inbox item is no longer available.')
+          try {
+            await refreshInboxMessage(ctx, dependencies, user.id, pair)
+          } catch {
+            // The current Inbox view may no longer be editable.
+          }
+          return
+        }
+
+        try {
+          await refreshInboxMessage(ctx, dependencies, user.id, pair)
+        } catch {
+          await ctx.reply('Moved to Learning. Please open /inbox to refresh.')
+        }
+      } finally {
+        await ctx.answerCbQuery()
+      }
+      return
+    }
     if (data === 'vocabulary:delete:cancel' || data === 'vocabulary:delete:confirm') {
       try {
         const pending = ctx.session?.pendingDelete
@@ -316,6 +447,12 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       const pair = dependencies.languagePairService.findDefaultForUser(user.id)
       if (!pair || pair.id !== learnAllMatch[1]) {
         await ctx.reply('This request expired. Please open /inbox again.')
+        return
+      }
+
+      const pendingEdit = ctx.session?.pendingTranslationEdit
+      if (pendingEdit?.inboxMessage && pendingEdit.languagePairId === pair.id) {
+        await ctx.reply('Finish editing the translation first')
         return
       }
 

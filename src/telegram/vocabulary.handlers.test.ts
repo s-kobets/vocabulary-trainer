@@ -29,6 +29,7 @@ function createHarness(options: {
   learningItems?: VocabularyItem[]
   learningCount?: number
   startLearning?: (...args: unknown[]) => number
+  startLearningItem?: (userId: string, pairId: string, itemId: string, now: Date) => boolean
   deleteText?: (userId: string, pairId: string, text: string) => boolean
   activePair?: LanguagePair | null
   findByText?: (userId: string, pairId: string, text: string) => VocabularyItem | null
@@ -38,12 +39,16 @@ function createHarness(options: {
 } = {}) {
   const handlers = new Map<string, Handler[]>()
   const replies: Array<{ text: string; extra?: unknown }> = []
+  const edits: Array<{ text: string; extra?: unknown }> = []
   const telegramEdits: unknown[][] = []
   let callbackAnswers = 0
   const loggerCalls: unknown[][] = []
   const listFilters: Array<{ status?: string; languagePairId?: string; limit?: number } | undefined> = []
   const countCalls: unknown[][] = []
   const learningCalls: unknown[][] = []
+  const singleLearningCalls: unknown[][] = []
+  let currentInboxItems = options.inboxItems ?? [item]
+  let currentInboxCount = options.inboxCount ?? 1
   const dependencies = {
     userService: {
       findByTelegramUserId: () => options.currentUser === undefined ? user : options.currentUser,
@@ -53,22 +58,41 @@ function createHarness(options: {
       addText: options.addText ?? (async () => ({ item, duplicate: false })),
       listForUser: (_userId: string, filters?: { status?: string; languagePairId?: string; limit?: number }) => {
         listFilters.push(filters)
-        return filters?.status === 'learning' ? options.learningItems ?? [item] : options.inboxItems ?? [item]
+        const items = filters?.status === 'learning' ? options.learningItems ?? [item] : currentInboxItems
+        const matchingItems = items.filter(
+          (entry) => filters?.languagePairId === undefined || entry.languagePairId === filters.languagePairId,
+        )
+        return filters?.limit === undefined ? matchingItems : matchingItems.slice(0, filters.limit)
       },
       countByStatus: (...args: unknown[]) => {
         countCalls.push(args)
         const status = args[1]
-        return status === 'learning' ? options.learningCount ?? 1 : options.inboxCount ?? 1
+        return status === 'learning' ? options.learningCount ?? 1 : currentInboxCount
       },
       deleteText: options.deleteText ?? (() => false),
       delete: () => false,
       findByText: options.findByText ?? ((_userId, _pairId, text) => text === item.normalizedText ? item : null),
       findForUser: options.findForUser ?? ((_userId, itemId) => itemId === item.id ? item : null),
-      replaceTranslations: options.replaceTranslations ?? ((_userId, _itemId, translations) => ({ ...item, translations })),
+      replaceTranslations: (userId: string, itemId: string, translations: string[]) => {
+        const updated = options.replaceTranslations?.(userId, itemId, translations) ?? { ...item, translations }
+        if (updated?.status === 'inbox') {
+          currentInboxItems = currentInboxItems.map((entry) => entry.id === itemId ? updated : entry)
+        }
+        return updated
+      },
     },
     reviewService: { startLearning: (...args: unknown[]) => {
       learningCalls.push(args)
       return options.startLearning?.(...args) ?? 1
+    }, startLearningItem: (userId: string, pairId: string, itemId: string, now: Date) => {
+      const args = [userId, pairId, itemId, now]
+      singleLearningCalls.push(args)
+      const moved = options.startLearningItem?.(userId, pairId, itemId, now) ?? true
+      if (moved) {
+        currentInboxItems = currentInboxItems.filter((entry) => entry.id !== itemId)
+        currentInboxCount = Math.max(0, currentInboxCount - 1)
+      }
+      return moved
     } },
     logger: { error: (...args: unknown[]) => loggerCalls.push(args) },
   } as unknown as BotDependencies
@@ -80,10 +104,13 @@ function createHarness(options: {
 
   const context = (message: string, data?: string, session: BotContext['session'] = {}): BotContext => ({
     from: { id: 42, first_name: 'Ada', is_bot: false },
-    message: { text: message }, callbackQuery: data ? { data } : undefined,
+    message: { text: message }, callbackQuery: data ? {
+      data, message: { message_id: 77, chat: { id: 88, type: 'private' }, date: 1, text: 'inbox' },
+    } : undefined,
     session,
     update: { update_id: 1 },
     reply: async (text: string, extra?: unknown) => { replies.push({ text, extra }) },
+    editMessageText: async (text: string, extra?: unknown) => { edits.push({ text, extra }) },
     telegram: { editMessageText: async (...args: unknown[]) => {
       telegramEdits.push(args)
       if (options.failTelegramEdit) throw new Error('message unavailable')
@@ -92,7 +119,7 @@ function createHarness(options: {
   } as unknown as BotContext)
 
   return {
-    dependencies, handlers, replies, telegramEdits, loggerCalls, listFilters, countCalls, learningCalls,
+    dependencies, handlers, replies, edits, telegramEdits, loggerCalls, listFilters, countCalls, learningCalls, singleLearningCalls,
     context, callbackAnswers: () => callbackAnswers,
     text: async (message: string, session: BotContext['session'] = {}) => {
       for (const handler of handlers.get('text') ?? []) await handler(context(message, undefined, session), async () => undefined)
@@ -251,6 +278,107 @@ test('review card refresh failure keeps saved translations and reports success',
   assert.match(harness.replies.at(-1)?.text ?? '', /Updated translations.*примерный/s)
 })
 
+test('Inbox edit action binds the pending edit to its item and source message', async () => {
+  const harness = createHarness()
+  const session: BotContext['session'] = {}
+
+  await harness.callback(`inbox:edit:${pair.id}:${item.id}`, session)
+
+  assert.deepEqual(session.pendingTranslationEdit, {
+    userId: user.id,
+    vocabularyItemId: item.id,
+    languagePairId: pair.id,
+    inboxMessage: { chatId: 88, messageId: 77 },
+  })
+  assert.match(harness.replies.at(-1)?.text ?? '', /send replacement translations for reliable/i)
+  assert.equal(harness.callbackAnswers(), 1)
+})
+
+test('saving an Inbox edit refreshes the original message with updated translations', async () => {
+  const harness = createHarness()
+  const session: BotContext['session'] = {
+    pendingTranslationEdit: {
+      userId: user.id,
+      vocabularyItemId: item.id,
+      languagePairId: pair.id,
+      inboxMessage: { chatId: 88, messageId: 77 },
+    },
+  }
+
+  await harness.text(' примерный\n\nприблизительный\nпримерный ', session)
+
+  assert.equal(session.pendingTranslationEdit, undefined)
+  assert.deepEqual(harness.telegramEdits[0].slice(0, 3), [88, 77, undefined])
+  assert.match(String(harness.telegramEdits[0][3]), /reliable -> примерный, приблизительный/)
+  assert.match(JSON.stringify(harness.telegramEdits[0][4]), /inbox:learn:pair-1:item-1/)
+  assert.equal(harness.replies.length, 0)
+})
+
+test('a moved Inbox item expires its pending Inbox edit without saving', async () => {
+  let saves = 0
+  const harness = createHarness({
+    findForUser: () => ({ ...item, status: 'learning' }),
+    replaceTranslations: (_userId, _itemId, translations) => {
+      saves++
+      return { ...item, translations }
+    },
+  })
+  const session: BotContext['session'] = {
+    pendingTranslationEdit: {
+      userId: user.id,
+      vocabularyItemId: item.id,
+      languagePairId: pair.id,
+      inboxMessage: { chatId: 88, messageId: 77 },
+    },
+  }
+
+  await harness.text('примерный', session)
+
+  assert.equal(saves, 0)
+  assert.equal(session.pendingTranslationEdit, undefined)
+  assert.match(harness.replies.at(-1)?.text ?? '', /edit.*expired/i)
+})
+
+test('Inbox edits block individual and bulk moves until translation input is finished', async () => {
+  for (const callback of [`inbox:learn:${pair.id}:${item.id}`, `inbox:learn_all:${pair.id}`]) {
+    const harness = createHarness()
+    const session: BotContext['session'] = {
+      pendingTranslationEdit: {
+        userId: user.id,
+        vocabularyItemId: item.id,
+        languagePairId: pair.id,
+        inboxMessage: { chatId: 88, messageId: 77 },
+      },
+    }
+
+    await harness.callback(callback, session)
+
+    assert.deepEqual(harness.singleLearningCalls, [])
+    assert.deepEqual(harness.learningCalls, [])
+    assert.match(harness.replies.at(-1)?.text ?? '', /finish editing/i)
+    assert.equal(harness.callbackAnswers(), 1)
+  }
+})
+
+test('Inbox edit callback rejects missing, foreign-pair, and non-Inbox items', async () => {
+  const cases = [
+    { options: { findForUser: () => null } },
+    { options: { findForUser: () => ({ ...item, languagePairId: 'other-pair' }) } },
+    { options: { findForUser: () => ({ ...item, status: 'learning' as const }) } },
+  ]
+
+  for (const { options } of cases) {
+    const harness = createHarness(options)
+    const session: BotContext['session'] = {}
+
+    await harness.callback(`inbox:edit:${pair.id}:${item.id}`, session)
+
+    assert.equal(session.pendingTranslationEdit, undefined)
+    assert.match(harness.replies.at(-1)?.text ?? '', /no longer available/i)
+    assert.equal(harness.callbackAnswers(), 1)
+  }
+})
+
 test('blank pending translation input is rejected and keeps the edit pending', async () => {
   const harness = createHarness()
   const session: BotContext['session'] = {
@@ -345,14 +473,79 @@ test('provider failure is logged safely and rendered with retry copy', async () 
   assert.equal(JSON.stringify(harness.loggerCalls).includes('provider secret'), false)
 })
 
-test('/inbox renders count, item text, and Learn all callback', async () => {
+test('/inbox renders bilingual items and per-item and bulk actions', async () => {
   const harness = createHarness({ inboxCount: 3 })
   await harness.inbox()
 
-  assert.match(harness.replies[0].text, /Inbox: 3.*reliable/s)
-  assert.match(JSON.stringify(harness.replies[0].extra), /Learn all/)
-  assert.match(JSON.stringify(harness.replies[0].extra), new RegExp(`inbox:learn_all:${pair.id}`))
+  assert.match(harness.replies[0].text, /Inbox: 3.*English.*Russian.*reliable.*надёжный/s)
+  const keyboard = JSON.stringify(harness.replies[0].extra)
+  assert.match(keyboard, /Edit translation/)
+  assert.match(keyboard, /Move to Learning/)
+  assert.match(keyboard, new RegExp(`inbox:edit:${pair.id}:${item.id}`))
+  assert.match(keyboard, new RegExp(`inbox:learn:${pair.id}:${item.id}`))
+  assert.match(keyboard, /Learn all/)
+  assert.match(keyboard, new RegExp(`inbox:learn_all:${pair.id}`))
   assert.doesNotMatch(JSON.stringify(harness.replies[0].extra), /vocabulary:delete:item:/)
+})
+
+test('/inbox empty view has no actions', async () => {
+  const harness = createHarness({ inboxItems: [], inboxCount: 0 })
+
+  await harness.inbox()
+
+  assert.match(harness.replies[0].text, /Inbox: 0/)
+  assert.equal(harness.replies[0].extra, undefined)
+})
+
+test('/inbox callback payloads fit Telegram limits with UUID identifiers', async () => {
+  const uuidPair = { ...pair, id: '12345678-1234-1234-1234-123456789abc' }
+  const uuidItem = { ...item, id: 'abcdefab-cdef-abcd-efab-cdefabcdefab', languagePairId: uuidPair.id }
+  const harness = createHarness({ activePair: uuidPair, inboxItems: [uuidItem], inboxCount: 1 })
+
+  await harness.inbox()
+
+  const keyboard = JSON.stringify(harness.replies[0].extra)
+  const callbackData = [...keyboard.matchAll(/"callback_data":"([^"]+)"/g)].map(([, value]) => value)
+  assert.equal(callbackData.length, 3)
+  for (const value of callbackData) {
+    assert.ok(Buffer.byteLength(value, 'utf8') <= 64, `${value} exceeds Telegram's 64-byte callback_data limit`)
+  }
+})
+
+test('individual Inbox move creates learning state and refreshes the same message', async () => {
+  const secondItem = { ...item, id: 'item-2', text: 'steady', normalizedText: 'steady' }
+  const harness = createHarness({ inboxItems: [item, secondItem], inboxCount: 2 })
+
+  await harness.callback(`inbox:learn:${pair.id}:${item.id}`)
+
+  assert.equal(harness.singleLearningCalls.length, 1)
+  assert.deepEqual(harness.singleLearningCalls[0].slice(0, 3), [user.id, pair.id, item.id])
+  assert.equal(harness.edits.length, 1)
+  assert.match(harness.edits[0].text, /Inbox: 1.*steady/s)
+  assert.doesNotMatch(harness.edits[0].text, /reliable/)
+  assert.match(JSON.stringify(harness.edits[0].extra), /Learn all/)
+  assert.equal(harness.callbackAnswers(), 1)
+})
+
+test('stale individual Inbox moves are rejected and the view is refreshed', async () => {
+  const otherPair = { ...pair, id: 'pair-2', sourceLanguage: 'de' }
+  const cases = [
+    { options: { currentUser: null } },
+    { options: { activePair: otherPair } },
+    { options: { findForUser: () => ({ ...item, status: 'learning' as const }), inboxItems: [], inboxCount: 0 } },
+  ]
+
+  for (const { options } of cases) {
+    const harness = createHarness(options)
+    await harness.callback(`inbox:learn:${pair.id}:${item.id}`)
+
+    assert.equal(harness.singleLearningCalls.length, 0)
+    assert.equal(harness.callbackAnswers(), 1)
+    if (options.currentUser !== null) {
+      assert.equal(harness.edits.length, 1)
+      assert.doesNotMatch(harness.edits[0].text, /reliable/)
+    }
+  }
 })
 
 test('/inbox passes newest-item ordering request to vocabulary service', async () => {

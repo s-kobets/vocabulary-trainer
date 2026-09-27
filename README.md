@@ -29,7 +29,8 @@ uses Telegram long polling.
 - `/status` shows the active language pair and Inbox, Learning, and Known counts.
 - `/languages` lists saved language pairs, selects the active pair, and adds new
   pairs. A pair containing vocabulary cannot be deleted.
-- `/inbox` shows words waiting to be learned.
+- `/inbox` shows words and translations waiting to be learned, with per-word edit
+  and move actions plus a bulk `Learn all` action.
 - `/learning` shows up to 10 words currently being learned for the active pair,
   reports the full count, and provides a button to review due words.
 - `/review` starts a review session for due words.
@@ -52,7 +53,10 @@ affordable
 
 To delete one word, send `/delete word`. For bulk deletion, send `/delete` and
 then one word or phrase per line; the bot asks for confirmation before deleting.
-The `/inbox` list stays compact and keeps only the Learn all action.
+The `/inbox` preview shows each source word with its translations and offers
+`Edit translation` and `Move to Learning` for each listed word. `Learn all` still
+moves all Inbox words in the active pair, including words beyond the 10-word
+preview.
 
 ## How It Works
 
@@ -96,8 +100,13 @@ affordable
 
 ### 3. Move Inbox Words to Learning
 
-Use `/inbox` to see up to 10 recent Inbox words and the total Inbox count.
-Press `Learn all` when you are ready to start studying.
+Use `/inbox` to see up to 10 recent Inbox words with their translations and the
+total Inbox count. Check the suggested translation before studying it.
+
+Use `Edit translation` to replace an incorrect translation, or `Move to
+Learning` to start studying one word. The inbox view refreshes after an
+individual move. Press `Learn all` to move every Inbox word for the active pair
+at once.
 
 `Learn all` moves **all Inbox words in the active language pair** to `Learning`,
 not only the 10 words displayed in the preview. It also creates their initial
@@ -225,7 +234,8 @@ actions, not separate Telegram commands.
 
 1. Select the desired pair with `/languages`.
 2. Send new words individually or paste a newline-separated list.
-3. Use `/inbox` to check the imported words and press `Learn all` when ready.
+3. Use `/inbox` to verify translations, edit or move individual words, or press
+   `Learn all` when ready to study the whole Inbox.
 4. Use `/learning` to see the learning list and its total count.
 5. Press `Review due words` whenever available, or send `/review`.
 6. Answer each card with `Knew it` or `Didn't know`.

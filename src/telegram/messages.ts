@@ -81,8 +81,18 @@ export function renderDuplicate(item: VocabularyItem): string {
   return `${item.text} is already in your vocabulary.`
 }
 
-export function renderInbox(items: VocabularyItem[], count: number): string {
-  return [`Inbox: ${count}`, ...items.map((item) => item.text)].join('\n')
+export function renderInbox(items: VocabularyItem[], count: number, pair: LanguagePair): string {
+  return [
+    `Inbox: ${count} (${languageName(pair.sourceLanguage)} -> ${languageName(pair.targetLanguage)})`,
+    ...items.map((item) => {
+      const translation = item.translations.length > 0
+        ? item.translations.join(', ')
+        : item.enrichmentStatus === 'pending' || item.enrichmentStatus === 'processing'
+          ? 'Translation pending'
+          : 'No translation available'
+      return `${item.text} -> ${translation}`
+    }),
+  ].join('\n')
 }
 
 export function renderLearning(items: VocabularyItem[], count: number): string {

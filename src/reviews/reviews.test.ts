@@ -76,6 +76,48 @@ test('learns inbox items only for the requested language pair', () => {
   db.close()
 })
 
+test('moves one inbox item to learning and creates one initial review state', () => {
+  const { db, vocabulary, reviews, service } = createReviews()
+  const item = createItem(vocabulary, 'user-a', 'alpha')
+  const now = new Date('2026-09-18T12:00:00.000Z')
+
+  assert.equal(service.startLearningItem('user-a', 'pair-a', item.id, now), true)
+  assert.equal(service.startLearningItem('user-a', 'pair-a', item.id, now), false)
+  assert.equal(vocabulary.findByIdForUser('user-a', item.id)?.status, 'learning')
+  assert.deepEqual(reviews.getState('user-a', item.id), {
+    id: reviews.getState('user-a', item.id)?.id,
+    userId: 'user-a',
+    vocabularyItemId: item.id,
+    level: 0,
+    nextReviewAt: now.toISOString(),
+    createdAt: reviews.getState('user-a', item.id)?.createdAt,
+    updatedAt: reviews.getState('user-a', item.id)?.updatedAt,
+  })
+  const stateCount = db.prepare('SELECT COUNT(*) AS count FROM review_states WHERE vocabulary_item_id = ?')
+    .get(item.id) as { count: number }
+  assert.equal(stateCount.count, 1)
+  db.close()
+})
+
+test('single-item learning rejects foreign, wrong-pair, missing, and non-inbox items', () => {
+  const { db, vocabulary, reviews, service } = createReviews()
+  const itemA = createItem(vocabulary, 'user-a', 'alpha')
+  const itemB = createItem(vocabulary, 'user-b', 'bravo')
+  const learningItem = createItem(vocabulary, 'user-a', 'charlie')
+  vocabulary.update('user-a', learningItem.id, { status: 'learning' })
+  const now = new Date('2026-09-18T12:00:00.000Z')
+
+  assert.equal(service.startLearningItem('user-a', 'pair-b', itemA.id, now), false)
+  assert.equal(service.startLearningItem('user-a', 'pair-a', itemB.id, now), false)
+  assert.equal(service.startLearningItem('user-a', 'pair-a', 'missing', now), false)
+  assert.equal(service.startLearningItem('user-a', 'pair-a', learningItem.id, now), false)
+  assert.equal(vocabulary.findByIdForUser('user-a', itemA.id)?.status, 'inbox')
+  assert.equal(reviews.getState('user-a', itemA.id), null)
+  assert.equal(reviews.getState('user-b', itemB.id), null)
+  assert.equal(reviews.getState('user-a', learningItem.id), null)
+  db.close()
+})
+
 test('filters due reviews by language pair when requested', () => {
   const { db, vocabulary, service } = createReviews()
   db.prepare('INSERT INTO language_pairs (id, user_id, source_language, target_language, created_at) VALUES (?, ?, ?, ?, ?)')

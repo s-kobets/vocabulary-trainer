@@ -31,6 +31,7 @@ export type BotSession = {
     vocabularyItemId: string
     languagePairId: string
     reviewMessage?: { chatId: number; messageId: number }
+    inboxMessage?: { chatId: number; messageId: number }
   }
 }
 

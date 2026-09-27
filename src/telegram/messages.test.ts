@@ -47,7 +47,7 @@ test('renders ready, vocabulary, inbox, and review messages from domain data', (
   assert.match(renderVocabularyAdded(item), /reliable.*надёжный/s)
   assert.match(renderVocabularyAdded(item), /Added to Inbox/)
   assert.match(renderDuplicate(item), /reliable is already in your vocabulary\./)
-  assert.match(renderInbox([item], 1), /Inbox: 1.*reliable/s)
+  assert.match(renderInbox([item], 1, pair), /Inbox: 1.*reliable.*надёжный/s)
   assert.match(renderReviewPrompt(item, 1, 8), /1 \/ 8.*reliable/s)
   assert.match(renderReviewAnswer(item, 1, 8), /Didn't know.*Knew it/s)
 })
@@ -78,4 +78,19 @@ test('renders delete confirmation and summary messages', () => {
 test('renders the learning list and full count', () => {
   const learning = { ...item, id: 'learning-1', text: 'approximate' }
   assert.match(renderLearning([item, learning], 12), /Learning: 12.*reliable.*approximate/s)
+})
+
+test('renders inbox translations in the active language pair', () => {
+  const multipleTranslations = { ...item, translations: ['надёжный', 'надежный'] }
+
+  assert.match(renderInbox([item], 1, pair), /English.*Russian.*reliable.*надёжный/s)
+  assert.match(renderInbox([multipleTranslations], 1, pair), /надёжный.*надежный/s)
+})
+
+test('renders an explicit state when an inbox translation is unavailable', () => {
+  const pending = { ...item, translations: [], enrichmentStatus: 'processing' as const }
+  const unavailable = { ...item, translations: [] }
+
+  assert.match(renderInbox([pending], 1, pair), /Translation pending/)
+  assert.match(renderInbox([unavailable], 1, pair), /No translation available/)
 })
