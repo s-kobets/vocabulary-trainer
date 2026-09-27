@@ -17,10 +17,13 @@ function reviewKeyboard(itemId: string) {
 }
 
 function answerKeyboard(itemId: string) {
-  return Markup.inlineKeyboard([[
-    Markup.button.callback("Didn't know", `review:incorrect:${itemId}`),
-    Markup.button.callback('Knew it', `review:correct:${itemId}`),
-  ]])
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("Didn't know", `review:incorrect:${itemId}`),
+      Markup.button.callback('Knew it', `review:correct:${itemId}`),
+    ],
+    [Markup.button.callback('Edit translation', `review:edit:${itemId}`)],
+  ])
 }
 
 function currentItem(ctx: BotContext, dependencies: BotDependencies) {
@@ -100,6 +103,33 @@ export function registerReviewHandlers(bot: Telegraf<BotContext>, dependencies: 
       return
     }
 
+    const editMatch = /^review:edit:([^:]+)$/.exec(ctx.callbackQuery.data)
+    if (editMatch) {
+      try {
+        const current = currentItem(ctx, dependencies)
+        const callbackMessage = 'message' in ctx.callbackQuery ? ctx.callbackQuery.message : undefined
+        const pair = current ? dependencies.languagePairService.findDefaultForUser(current.user.id) : null
+      if (!current || !current.review.revealed || current.item.id !== editMatch[1] || !pair
+          || current.item.languagePairId !== pair.id || !callbackMessage || !('chat' in callbackMessage)) {
+          await ctx.reply('This review card is no longer active. Please start /review again.')
+          return
+        }
+
+        ctx.session!.pendingTranslationEdit = {
+          userId: current.user.id,
+          vocabularyItemId: current.item.id,
+          languagePairId: pair.id,
+          reviewMessage: { chatId: callbackMessage.chat.id, messageId: callbackMessage.message_id },
+        }
+        await ctx.editMessageText(`Send replacement translations for ${current.item.text}, one per line:`, {
+          reply_markup: { inline_keyboard: [] },
+        })
+      } finally {
+        await ctx.answerCbQuery()
+      }
+      return
+    }
+
     const match = /^review:(show|correct|incorrect):([^:]+)$/.exec(ctx.callbackQuery.data)
     if (!match) {
       await next()
@@ -107,6 +137,12 @@ export function registerReviewHandlers(bot: Telegraf<BotContext>, dependencies: 
     }
 
     try {
+      if (ctx.session?.pendingTranslationEdit?.reviewMessage
+        && ctx.session.pendingTranslationEdit.vocabularyItemId === match[2]) {
+        await ctx.reply('Finish editing the translation first')
+        return
+      }
+
       const review = sessionFor(ctx)
       if (!review || review.itemIds[review.index] !== match[2]) {
         await expire(ctx)

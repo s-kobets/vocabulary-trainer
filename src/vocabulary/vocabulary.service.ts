@@ -61,6 +61,16 @@ export class VocabularyService {
     }
   }
 
+  findByText(userId: string, pairId: string, rawText: string): VocabularyItem | null {
+    const normalizedText = normalizeText(rawText)
+    return normalizedText ? this.repository.findByNormalizedText(userId, pairId, normalizedText) : null
+  }
+
+  replaceTranslations(userId: string, itemId: string, translations: string[]): VocabularyItem | null {
+    if (translations.length === 0) throw new Error('At least one translation is required')
+    return this.repository.update(userId, itemId, { translations })
+  }
+
   findForUser(userId: string, itemId: string): VocabularyItem | null {
     return this.repository.findByIdForUser(userId, itemId)
   }

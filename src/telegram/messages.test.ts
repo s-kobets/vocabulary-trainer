@@ -56,6 +56,7 @@ test('renders help, status, and language pair messages', () => {
   const inactivePair = { ...pair, id: 'pair-2', sourceLanguage: 'de', targetLanguage: 'fr', isDefault: false }
 
   assert.match(renderHelp(), /\/start.*\/languages.*\/status.*\/inbox.*\/review/s)
+  assert.match(renderHelp(), /\/edit <word> - Edit translations/)
   assert.match(renderStatus(pair, { inbox: 2, learning: 3, known: 4 }), /English.*Russian/s)
   assert.match(renderStatus(pair, { inbox: 2, learning: 3, known: 4 }), /Inbox: 2.*Learning: 3.*Known: 4/s)
   assert.match(renderLanguages([pair, inactivePair]), /English.*Russian.*active/s)

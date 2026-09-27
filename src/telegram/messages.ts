@@ -25,6 +25,7 @@ export function renderHelp(): string {
     '/status - Show your active pair and vocabulary counts',
     '/inbox - Show words waiting to be learned',
     '/review - Review words that are due',
+    '/edit <word> - Edit translations',
   ].join('\n')
 }
 

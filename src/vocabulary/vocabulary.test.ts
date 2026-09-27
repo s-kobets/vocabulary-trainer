@@ -212,6 +212,39 @@ test('finds vocabulary only for the requested user', async () => {
   db.close()
 })
 
+test('finds by normalized text within a pair and replaces only owned translations', () => {
+  const { db, repository } = createVocabulary()
+  const service = new VocabularyService(repository, new RecordingDictionaryProvider())
+  const created = repository.create(createInput({ transcription: '/rɪˈlaɪəbəl/', partOfSpeech: 'adjective' }))
+  const otherPairItem = repository.create(createInput({ languagePairId: 'pair-b' }))
+  const reviewAt = '2026-09-20T00:00:00.000Z'
+  db.prepare(`INSERT INTO review_states
+    (id, user_id, vocabulary_item_id, level, next_review_at, created_at, updated_at)
+    VALUES (?, ?, ?, 2, ?, ?, ?)`)
+    .run('state-1', 'user-a', created.id, reviewAt, reviewAt, reviewAt)
+
+  assert.equal(service.findByText('user-a', 'pair-a', ' RELIABLE ')?.id, created.id)
+  assert.equal(service.findByText('user-a', 'pair-b', 'reliable')?.id, otherPairItem.id)
+  assert.equal(service.findByText('user-b', 'pair-a', 'reliable'), null)
+  assert.equal(service.findByText('user-a', 'pair-b', 'missing'), null)
+
+  const updated = service.replaceTranslations('user-a', created.id, ['примерный', 'приблизительный'])
+  assert.deepEqual(updated?.translations, ['примерный', 'приблизительный'])
+  assert.equal(updated?.text, created.text)
+  assert.equal(updated?.status, created.status)
+  assert.deepEqual(updated?.examples, created.examples)
+  assert.equal(updated?.transcription, '/rɪˈlaɪəbəl/')
+  assert.equal(updated?.partOfSpeech, 'adjective')
+  assert.equal(service.replaceTranslations('user-b', created.id, ['чужое']), null)
+  assert.throws(() => service.replaceTranslations('user-a', created.id, []), /At least one translation is required/)
+  assert.equal(repository.findByIdForUser('user-a', otherPairItem.id)?.translations[0], 'mock translation')
+  assert.equal(
+    (db.prepare('SELECT next_review_at FROM review_states WHERE vocabulary_item_id = ?').get(created.id) as { next_review_at: string }).next_review_at,
+    reviewAt,
+  )
+  db.close()
+})
+
 test('deletes normalized text only from the requested user and pair with review cascades', async () => {
   const { db, repository } = createVocabulary()
   const service = new VocabularyService(repository, new RecordingDictionaryProvider())

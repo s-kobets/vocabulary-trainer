@@ -10,6 +10,7 @@ const commands = [
   { command: 'learning', description: 'Show learning words' },
   { command: 'review', description: 'Review due words' },
   { command: 'delete', description: 'Delete words' },
+  { command: 'edit', description: 'Edit word translations' },
 ]
 
 export async function registerCommandMenu(bot: Telegraf<BotContext>): Promise<void> {

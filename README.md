@@ -34,6 +34,7 @@ uses Telegram long polling.
   reports the full count, and provides a button to review due words.
 - `/review` starts a review session for due words.
 - `/delete` deletes one word immediately or asks for confirmation before bulk deletion.
+- `/edit <word>` replaces translations for a word in the active language pair.
 
 To add multiple words at once, paste one word or phrase per line. Empty lines
 are ignored and the bot reports Added, Duplicates, and Failed counts.
@@ -164,6 +165,20 @@ filled
 The bot asks for confirmation before deleting the batch. Empty lines and
 duplicate entries are ignored. Deleting a word also removes its review schedule
 and review history.
+
+### 8. Edit Translations
+
+Replace translations on an existing word without deleting its card:
+
+```text
+/edit approximate
+примерный
+приблизительный
+```
+
+Send one replacement translation per line. The new list replaces all previous
+translations. During `/review`, use `Edit translation` on a revealed answer card
+to start the same flow without typing the source word.
 
 ## Command Lifecycle
 

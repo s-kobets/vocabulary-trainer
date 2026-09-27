@@ -26,6 +26,12 @@ export type BotSession = {
     languagePairId: string
     words: string[]
   }
+  pendingTranslationEdit?: {
+    userId: string
+    vocabularyItemId: string
+    languagePairId: string
+    reviewMessage?: { chatId: number; messageId: number }
+  }
 }
 
 export type BotContext = Context & SessionContext<BotSession>

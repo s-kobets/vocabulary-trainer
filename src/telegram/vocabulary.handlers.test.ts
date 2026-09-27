@@ -31,9 +31,14 @@ function createHarness(options: {
   startLearning?: (...args: unknown[]) => number
   deleteText?: (userId: string, pairId: string, text: string) => boolean
   activePair?: LanguagePair | null
+  findByText?: (userId: string, pairId: string, text: string) => VocabularyItem | null
+  findForUser?: (userId: string, itemId: string) => VocabularyItem | null
+  replaceTranslations?: (userId: string, itemId: string, translations: string[]) => VocabularyItem | null
+  failTelegramEdit?: boolean
 } = {}) {
   const handlers = new Map<string, Handler[]>()
   const replies: Array<{ text: string; extra?: unknown }> = []
+  const telegramEdits: unknown[][] = []
   let callbackAnswers = 0
   const loggerCalls: unknown[][] = []
   const listFilters: Array<{ status?: string; languagePairId?: string; limit?: number } | undefined> = []
@@ -43,7 +48,7 @@ function createHarness(options: {
     userService: {
       findByTelegramUserId: () => options.currentUser === undefined ? user : options.currentUser,
     },
-    languagePairService: { findDefaultForUser: () => options.activePair ?? (options.defaultPair === undefined ? pair : options.defaultPair) },
+    languagePairService: { findDefaultForUser: () => options.activePair === undefined ? options.defaultPair === undefined ? pair : options.defaultPair : options.activePair },
     vocabularyService: {
       addText: options.addText ?? (async () => ({ item, duplicate: false })),
       listForUser: (_userId: string, filters?: { status?: string; languagePairId?: string; limit?: number }) => {
@@ -57,7 +62,9 @@ function createHarness(options: {
       },
       deleteText: options.deleteText ?? (() => false),
       delete: () => false,
-      findForUser: () => item,
+      findByText: options.findByText ?? ((_userId, _pairId, text) => text === item.normalizedText ? item : null),
+      findForUser: options.findForUser ?? ((_userId, itemId) => itemId === item.id ? item : null),
+      replaceTranslations: options.replaceTranslations ?? ((_userId, _itemId, translations) => ({ ...item, translations })),
     },
     reviewService: { startLearning: (...args: unknown[]) => {
       learningCalls.push(args)
@@ -71,19 +78,29 @@ function createHarness(options: {
   } as unknown as Telegraf<BotContext>
   registerVocabularyHandlers(bot, dependencies)
 
-  const context = (message: string, data?: string): BotContext => ({
+  const context = (message: string, data?: string, session: BotContext['session'] = {}): BotContext => ({
     from: { id: 42, first_name: 'Ada', is_bot: false },
     message: { text: message }, callbackQuery: data ? { data } : undefined,
+    session,
     update: { update_id: 1 },
     reply: async (text: string, extra?: unknown) => { replies.push({ text, extra }) },
+    telegram: { editMessageText: async (...args: unknown[]) => {
+      telegramEdits.push(args)
+      if (options.failTelegramEdit) throw new Error('message unavailable')
+    } },
     answerCbQuery: async () => { callbackAnswers++ },
   } as unknown as BotContext)
 
   return {
-    dependencies, handlers, replies, loggerCalls, listFilters, countCalls, learningCalls,
+    dependencies, handlers, replies, telegramEdits, loggerCalls, listFilters, countCalls, learningCalls,
     context, callbackAnswers: () => callbackAnswers,
-    text: async (message: string) => {
-      for (const handler of handlers.get('text') ?? []) await handler(context(message), async () => undefined)
+    text: async (message: string, session: BotContext['session'] = {}) => {
+      for (const handler of handlers.get('text') ?? []) await handler(context(message, undefined, session), async () => undefined)
+    },
+    edit: async (message: string, session: BotContext['session'] = {}) => {
+      const ctx = context(message, undefined, session)
+      await handlers.get('command:edit')?.[0]?.(ctx)
+      return ctx
     },
     inbox: async () => handlers.get('command:inbox')?.[0]?.(context('/inbox')),
     learning: async () => handlers.get('command:learning')?.[0]?.(context('/learning')),
@@ -133,6 +150,181 @@ test('text middleware forwards slash commands to later command handlers', async 
 
   assert.equal(forwarded, true)
   assert.equal(harness.replies.length, 0)
+})
+
+test('/edit finds a word in the active pair and asks for replacement translations', async () => {
+  const session: BotContext['session'] = {}
+  const harness = createHarness()
+
+  await harness.edit('/edit reliable', session)
+
+  assert.deepEqual(session.pendingTranslationEdit, {
+    userId: user.id,
+    vocabularyItemId: item.id,
+    languagePairId: pair.id,
+  })
+  assert.match(harness.replies.at(-1)?.text ?? '', /send.*translation/i)
+})
+
+test('/edit rejects missing or unknown words without creating pending state', async () => {
+  const noWord = createHarness()
+  const noWordSession: BotContext['session'] = {}
+  await noWord.edit('/edit', noWordSession)
+  assert.equal(noWordSession.pendingTranslationEdit, undefined)
+  assert.match(noWord.replies.at(-1)?.text ?? '', /provide.*word/i)
+
+  const unknown = createHarness({ findByText: () => null })
+  const unknownSession: BotContext['session'] = {}
+  await unknown.edit('/edit absent', unknownSession)
+  assert.equal(unknownSession.pendingTranslationEdit, undefined)
+  assert.match(unknown.replies.at(-1)?.text ?? '', /not found/i)
+})
+
+test('/edit rejects a lookup result outside the active pair', async () => {
+  const harness = createHarness({ findByText: () => ({ ...item, languagePairId: 'other-pair' }) })
+  const session: BotContext['session'] = {}
+
+  await harness.edit('/edit reliable', session)
+
+  assert.equal(session.pendingTranslationEdit, undefined)
+  assert.match(harness.replies.at(-1)?.text ?? '', /not found/i)
+})
+
+test('pending translation input trims, removes blanks and exact duplicates, and replaces translations', async () => {
+  const saved: string[][] = []
+  const harness = createHarness({
+    replaceTranslations: (_userId, _itemId, translations) => {
+      saved.push(translations)
+      return { ...item, translations }
+    },
+  })
+  const session: BotContext['session'] = {
+    pendingTranslationEdit: { userId: user.id, vocabularyItemId: item.id, languagePairId: pair.id },
+  }
+
+  await harness.text(' примерный \n\nприблизительный\nпримерный ', session)
+
+  assert.deepEqual(saved, [['примерный', 'приблизительный']])
+  assert.equal(session.pendingTranslationEdit, undefined)
+  assert.match(harness.replies.at(-1)?.text ?? '', /reliable.*примерный.*приблизительный/s)
+})
+
+test('review-originated edit restores the updated answer card and preserves review progress', async () => {
+  const harness = createHarness()
+  const review = { itemIds: ['item-1', 'item-2'], index: 0, revealed: true }
+  const session: BotContext['session'] = {
+    review,
+    pendingTranslationEdit: {
+      userId: user.id,
+      vocabularyItemId: item.id,
+      languagePairId: pair.id,
+      reviewMessage: { chatId: 88, messageId: 77 },
+    },
+  }
+
+  await harness.text('примерный\nприблизительный', session)
+
+  assert.deepEqual(session.review, review)
+  assert.equal(session.pendingTranslationEdit, undefined)
+  assert.deepEqual(harness.telegramEdits[0].slice(0, 3), [88, 77, undefined])
+  assert.match(String(harness.telegramEdits[0][3]), /reliable.*примерный.*приблизительный/s)
+  assert.match(JSON.stringify(harness.telegramEdits[0][4]), /review:correct:item-1.*review:edit:item-1/s)
+  assert.equal(harness.replies.length, 0)
+})
+
+test('review card refresh failure keeps saved translations and reports success', async () => {
+  const harness = createHarness({ failTelegramEdit: true })
+  const session: BotContext['session'] = {
+    review: { itemIds: ['item-1'], index: 0, revealed: true },
+    pendingTranslationEdit: {
+      userId: user.id,
+      vocabularyItemId: item.id,
+      languagePairId: pair.id,
+      reviewMessage: { chatId: 88, messageId: 77 },
+    },
+  }
+
+  await harness.text('примерный', session)
+
+  assert.equal(session.review?.index, 0)
+  assert.equal(session.pendingTranslationEdit, undefined)
+  assert.match(harness.replies.at(-1)?.text ?? '', /Updated translations.*примерный/s)
+})
+
+test('blank pending translation input is rejected and keeps the edit pending', async () => {
+  const harness = createHarness()
+  const session: BotContext['session'] = {
+    pendingTranslationEdit: { userId: user.id, vocabularyItemId: item.id, languagePairId: pair.id },
+  }
+
+  await harness.text(' \n  \n', session)
+
+  assert.ok(session.pendingTranslationEdit)
+  assert.match(harness.replies.at(-1)?.text ?? '', /at least one translation/i)
+})
+
+test('stale pending edit expires without importing the submitted translation', async () => {
+  let addCalls = 0
+  const harness = createHarness({ addText: async () => { addCalls++; return { item, duplicate: false } } })
+  const session: BotContext['session'] = {
+    pendingTranslationEdit: { userId: user.id, vocabularyItemId: item.id, languagePairId: 'old-pair' },
+  }
+
+  await harness.text('примерный', session)
+
+  assert.equal(addCalls, 0)
+  assert.equal(session.pendingTranslationEdit, undefined)
+  assert.match(harness.replies.at(-1)?.text ?? '', /edit.*expired/i)
+})
+
+test('pending edit expires when the user, active pair, or target item is unavailable', async () => {
+  const cases = [
+    { options: { currentUser: null } },
+    { options: { activePair: null } },
+    { options: { findForUser: () => null } },
+  ]
+
+  for (const { options } of cases) {
+    let addCalls = 0
+    const harness = createHarness({ ...options, addText: async () => { addCalls++; return { item, duplicate: false } } })
+    const session: BotContext['session'] = {
+      pendingTranslationEdit: { userId: user.id, vocabularyItemId: item.id, languagePairId: pair.id },
+    }
+    await harness.text('примерный', session)
+    assert.equal(addCalls, 0)
+    assert.equal(session.pendingTranslationEdit, undefined)
+    assert.match(harness.replies.at(-1)?.text ?? '', /edit.*expired/i)
+  }
+})
+
+test('any new /edit request replaces or clears the previous pending target', async () => {
+  const existing: NonNullable<BotContext['session']>['pendingTranslationEdit'] = {
+    userId: user.id, vocabularyItemId: 'old-item', languagePairId: pair.id,
+  }
+  const session: BotContext['session'] = { pendingTranslationEdit: existing }
+  const harness = createHarness({ findByText: (_userId, _pairId, text) => text === item.normalizedText ? item : null })
+
+  await harness.edit('/edit missing', session)
+  assert.equal(session.pendingTranslationEdit, undefined)
+
+  await harness.edit('/edit reliable', session)
+  assert.deepEqual(session.pendingTranslationEdit, {
+    userId: user.id, vocabularyItemId: item.id, languagePairId: pair.id,
+  })
+})
+
+test('commands are forwarded without consuming a pending translation edit', async () => {
+  const harness = createHarness()
+  const session: BotContext['session'] = {
+    pendingTranslationEdit: { userId: user.id, vocabularyItemId: item.id, languagePairId: pair.id },
+  }
+  let forwarded = false
+
+  const handler = harness.handlers.get('text')?.[0]
+  await handler?.(harness.context('/status', undefined, session), async () => { forwarded = true })
+
+  assert.equal(forwarded, true)
+  assert.ok(session.pendingTranslationEdit)
 })
 
 test('capture requires existing user and default pair', async () => {

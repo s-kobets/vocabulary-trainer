@@ -34,10 +34,12 @@ function createHarness(options: {
   due?: DueReview[]
   currentUser?: typeof user | null
   items?: Record<string, VocabularyItem | null>
+  activePair?: LanguagePair | null
 } = {}) {
   const handlers = new Map<string, Handler[]>()
   const replies: Array<{ text: string; extra?: unknown }> = []
   const edits: Array<{ text: string; extra?: unknown }> = []
+  const telegramEdits: unknown[][] = []
   const answers: string[] = []
   const answerCalls: Array<{ userId: string; itemId: string; result: string }> = []
   const duePairIds: Array<string | undefined> = []
@@ -52,7 +54,7 @@ function createHarness(options: {
         return itemId === 'item-1' ? item(itemId, 'reliable') : item(itemId, 'steady')
       },
     },
-    languagePairService: { findDefaultForUser: () => pair },
+    languagePairService: { findDefaultForUser: () => options.activePair ?? pair },
     reviewService: {
       getDue: (_userId: string, _now: Date, _limit: number, pairId?: string) => {
         duePairIds.push(pairId)
@@ -70,21 +72,27 @@ function createHarness(options: {
   } as unknown as Telegraf<BotContext>
   registerReviewHandlers(bot, dependencies)
 
-  const context = (data?: string, session: BotContext['session'] = {}): BotContext => ({
+  const context = (data?: string, session: BotContext['session'] = {}, inlineMessage = false): BotContext => ({
     from: { id: 42, first_name: 'Ada', is_bot: false },
-    callbackQuery: data ? { data } : undefined,
+    callbackQuery: data ? {
+      data,
+      ...(inlineMessage ? { inline_message_id: 'inline-1' } : {
+        message: { message_id: 77, chat: { id: 88, type: 'private' }, date: 1, text: 'card' },
+      }),
+    } : undefined,
     session,
     update: { update_id: 1 },
     reply: async (text: string, extra?: unknown) => { replies.push({ text, extra }) },
     editMessageText: async (text: string, extra?: unknown) => { edits.push({ text, extra }) },
+    telegram: { editMessageText: async (...args: unknown[]) => { telegramEdits.push(args) } },
     answerCbQuery: async (text?: string) => { answers.push(text ?? '') },
   } as unknown as BotContext)
 
   return {
-    dependencies, handlers, replies, edits, answers, answerCalls, duePairIds, context,
+    dependencies, handlers, replies, edits, telegramEdits, answers, answerCalls, duePairIds, context,
     review: async (ctx: BotContext) => handlers.get('command:review')?.[0]?.(ctx),
-    callback: async (data: string, session: BotContext['session']) => {
-      for (const handler of handlers.get('callback_query') ?? []) await handler(context(data, session), async () => undefined)
+    callback: async (data: string, session: BotContext['session'], inlineMessage = false) => {
+      for (const handler of handlers.get('callback_query') ?? []) await handler(context(data, session, inlineMessage), async () => undefined)
     },
   }
 }
@@ -130,6 +138,64 @@ test('show callback uses current session item, reveals it, and acknowledges call
   assert.match(harness.edits[0].text, /reliable.*reliable-translation/s)
   assert.match(JSON.stringify(harness.edits[0].extra), /review:incorrect:item-1.*review:correct:item-1/s)
   assert.equal(harness.answers.length, 1)
+})
+
+test('revealed review card can start a translation edit without changing review progress', async () => {
+  const harness = createHarness()
+  const session: BotContext['session'] = {
+    review: { itemIds: ['item-1', 'item-2'], index: 0, revealed: true },
+  }
+
+  await harness.callback('review:edit:item-1', session)
+
+  assert.deepEqual(session.pendingTranslationEdit, {
+    userId: user.id,
+    vocabularyItemId: 'item-1',
+    languagePairId: pair.id,
+    reviewMessage: { chatId: 88, messageId: 77 },
+  })
+  assert.deepEqual(session.review, { itemIds: ['item-1', 'item-2'], index: 0, revealed: true })
+  assert.match(harness.edits[0].text, /send.*translation/i)
+  assert.deepEqual(harness.edits[0].extra, { reply_markup: { inline_keyboard: [] } })
+  assert.equal(harness.answers.length, 1)
+})
+
+test('review answer callbacks cannot advance while translation editing is pending', async () => {
+  const harness = createHarness()
+  const session: BotContext['session'] = {
+    review: { itemIds: ['item-1', 'item-2'], index: 0, revealed: true },
+    pendingTranslationEdit: {
+      userId: user.id,
+      vocabularyItemId: 'item-1',
+      languagePairId: pair.id,
+      reviewMessage: { chatId: 88, messageId: 77 },
+    },
+  }
+
+  await harness.callback('review:correct:item-1', session)
+
+  assert.deepEqual(harness.answerCalls, [])
+  assert.deepEqual(session.review, { itemIds: ['item-1', 'item-2'], index: 0, revealed: true })
+  assert.ok(session.pendingTranslationEdit)
+  assert.match(harness.replies[0].text, /finish editing/i)
+  assert.equal(harness.answers.length, 1)
+})
+
+test('review translation edit rejects unrevealed, stale, inline, and wrong-pair callbacks', async () => {
+  const cases: Array<{ data: string; session: BotContext['session']; options?: Parameters<typeof createHarness>[0]; inline?: boolean }> = [
+    { data: 'review:edit:item-1', session: { review: { itemIds: ['item-1'], index: 0, revealed: false } } },
+    { data: 'review:edit:item-2', session: { review: { itemIds: ['item-1'], index: 0, revealed: true } } },
+    { data: 'review:edit:item-1', session: { review: { itemIds: ['item-1'], index: 0, revealed: true } }, inline: true },
+    { data: 'review:edit:item-1', session: { review: { itemIds: ['item-1'], index: 0, revealed: true } }, options: { activePair: { ...pair, id: 'pair-2' } } },
+  ]
+
+  for (const entry of cases) {
+    const harness = createHarness(entry.options)
+    await harness.callback(entry.data, entry.session, entry.inline)
+    assert.equal(entry.session?.pendingTranslationEdit, undefined)
+    assert.equal(harness.telegramEdits.length, 0)
+    assert.equal(harness.answers.length, 1)
+  }
 })
 
 test('stale show callback clears session and reports expiration', async () => {

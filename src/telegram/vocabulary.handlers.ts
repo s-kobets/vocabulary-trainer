@@ -8,6 +8,7 @@ import {
   renderDuplicate,
   renderInbox,
   renderLearning,
+  renderReviewAnswer,
   renderVocabularyAdded,
   renderVocabularyPending,
 } from './messages'
@@ -20,6 +21,59 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
     const text = ctx.message.text
     if (text.startsWith('/')) {
       await next()
+      return
+    }
+
+    const pendingEdit = ctx.session?.pendingTranslationEdit
+    if (pendingEdit) {
+      const user = getCurrentUser(ctx, dependencies.userService)
+      const pair = user ? dependencies.languagePairService.findDefaultForUser(user.id) : null
+      const item = user ? dependencies.vocabularyService.findForUser(user.id, pendingEdit.vocabularyItemId) : null
+      if (!user || !pair || pendingEdit.userId !== user.id || pendingEdit.languagePairId !== pair.id
+        || !item || item.languagePairId !== pair.id) {
+        ctx.session!.pendingTranslationEdit = undefined
+        await ctx.reply('Translation edit expired. Please start again with /edit.')
+        return
+      }
+
+      const translations = [...new Set(text.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))]
+      if (translations.length === 0) {
+        await ctx.reply('Please provide at least one translation')
+        return
+      }
+
+      const updated = dependencies.vocabularyService.replaceTranslations(user.id, item.id, translations)
+      if (!updated) {
+        ctx.session!.pendingTranslationEdit = undefined
+        await ctx.reply('Translation edit expired. Please start again with /edit.')
+        return
+      }
+      ctx.session!.pendingTranslationEdit = undefined
+      const successMessage = `Updated translations for ${updated.text}:\n${updated.translations.join('\n')}`
+      if (pendingEdit.reviewMessage) {
+        try {
+          const review = ctx.session?.review
+          const index = review?.itemIds.indexOf(updated.id) ?? -1
+          if (!review || index < 0) throw new Error('Review message is no longer active')
+          await ctx.telegram.editMessageText(
+            pendingEdit.reviewMessage.chatId,
+            pendingEdit.reviewMessage.messageId,
+            undefined,
+            renderReviewAnswer(updated, index + 1, review.itemIds.length),
+            Markup.inlineKeyboard([
+              [
+                Markup.button.callback("Didn't know", `review:incorrect:${updated.id}`),
+                Markup.button.callback('Knew it', `review:correct:${updated.id}`),
+              ],
+              [Markup.button.callback('Edit translation', `review:edit:${updated.id}`)],
+            ]),
+          )
+        } catch {
+          await ctx.reply(successMessage)
+        }
+      } else {
+        await ctx.reply(successMessage)
+      }
       return
     }
 
@@ -71,6 +125,40 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       dependencies.logger.error({ errorType: error instanceof Error ? 'Error' : typeof error }, 'Vocabulary provider failed')
       await ctx.reply(providerFailureMessage)
     }
+  })
+
+  bot.command('edit', async (ctx) => {
+    const session = (ctx.session ??= {})
+    session.pendingTranslationEdit = undefined
+    const body = ctx.message.text.replace(/^\/edit(?:@[^\s]+)?/, '').trim()
+    if (!body) {
+      await ctx.reply('Please provide a word or phrase after /edit')
+      return
+    }
+
+    const user = getCurrentUser(ctx, dependencies.userService)
+    if (!user) {
+      await ctx.reply('Please send /start first')
+      return
+    }
+    const pair = dependencies.languagePairService.findDefaultForUser(user.id)
+    if (!pair) {
+      await ctx.reply('Choose your languages with /start first')
+      return
+    }
+
+    const item = dependencies.vocabularyService.findByText(user.id, pair.id, body)
+    if (!item || item.languagePairId !== pair.id) {
+      await ctx.reply('Word not found in the active language pair')
+      return
+    }
+
+    session.pendingTranslationEdit = {
+      userId: user.id,
+      vocabularyItemId: item.id,
+      languagePairId: pair.id,
+    }
+    await ctx.reply(`Send replacement translations for ${item.text}, one per line:`)
   })
 
   bot.command('inbox', async (ctx) => {

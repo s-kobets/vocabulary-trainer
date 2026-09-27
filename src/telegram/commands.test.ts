@@ -14,5 +14,6 @@ test('registers the Telegram command menu', async () => {
     { command: 'learning', description: 'Show learning words' },
     { command: 'review', description: 'Review due words' },
     { command: 'delete', description: 'Delete words' },
+    { command: 'edit', description: 'Edit word translations' },
   ])
 })
