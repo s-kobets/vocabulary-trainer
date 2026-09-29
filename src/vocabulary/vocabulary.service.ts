@@ -1,4 +1,5 @@
 import type { DictionaryProvider } from '../dictionary/dictionary.types'
+import { dictionaryFailureFields } from '../dictionary/dictionary.errors'
 import type { LanguagePair } from '../languages/language-pair.types'
 import { classifyText, normalizeText } from './normalize'
 import { VocabularyRepository, type VocabularyListFilters } from './vocabulary.repository'
@@ -10,10 +11,13 @@ export type AddVocabularyResult = {
   pending?: boolean
 }
 
+type ErrorLogger = { error: (fields: Record<string, string | number>, message: string) => void }
+
 export class VocabularyService {
   constructor(
     private readonly repository: VocabularyRepository,
     private readonly dictionaryProvider: DictionaryProvider,
+    private readonly logger?: ErrorLogger,
   ) {}
 
   async addText(userId: string, pair: LanguagePair, rawText: string): Promise<AddVocabularyResult> {
@@ -51,6 +55,7 @@ export class VocabularyService {
       }) ?? item
       return { item, duplicate: false }
     } catch (error) {
+      this.logger?.error({ itemId: item.id, ...dictionaryFailureFields(error) }, 'Dictionary enrichment failed')
       item = this.repository.updateEnrichment(userId, item.id, {
         translations: [],
         examples: [],

@@ -1,11 +1,14 @@
 import type { DictionaryInput, DictionaryProvider, DictionaryResult } from './dictionary.types'
+import { OpenAiDictionaryError } from './dictionary.errors'
+export { OpenAiDictionaryError } from './dictionary.errors'
 
 type Options = { apiKey: string; model?: string; fetchImpl?: typeof fetch; timeoutMs?: number }
 
 function parseResult(value: unknown): DictionaryResult {
   if (!value || typeof value !== 'object') throw new Error('Invalid dictionary response')
   const result = value as Record<string, unknown>
-  if (!Array.isArray(result.translations) || result.translations.some((item) => typeof item !== 'string')) {
+  if (!Array.isArray(result.translations) || result.translations.length === 0
+    || result.translations.some((item) => typeof item !== 'string' || !item.trim())) {
     throw new Error('Invalid dictionary translations')
   }
   const examples = result.examples
@@ -32,6 +35,7 @@ export class OpenAiDictionaryProvider implements DictionaryProvider {
   async lookup(input: DictionaryInput): Promise<DictionaryResult> {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
+    let requestId: string | undefined
     try {
       const response = await this.fetchImpl('https://api.openai.com/v1/responses', {
         method: 'POST',
@@ -43,14 +47,51 @@ export class OpenAiDictionaryProvider implements DictionaryProvider {
           text: { format: { type: 'json_object' } },
         }),
       })
-      if (!response.ok) throw new Error(`OpenAI request failed: ${response.status}`)
-      const payload = await response.json() as Record<string, unknown>
-      const outputText = typeof payload.output_text === 'string' ? payload.output_text : undefined
-      if (!outputText) throw new Error('OpenAI response has no output text')
-      return parseResult(JSON.parse(outputText))
+      requestId = response.headers.get('x-request-id') ?? undefined
+      if (!response.ok) {
+        const body = await response.json().catch(() => undefined) as Record<string, unknown> | undefined
+        const apiError = body?.error && typeof body.error === 'object'
+          ? body.error as Record<string, unknown>
+          : undefined
+        throw new OpenAiDictionaryError(`OpenAI HTTP request failed (${response.status})`, {
+          kind: 'http',
+          status: response.status,
+          ...(typeof apiError?.code === 'string' ? { apiCode: apiError.code } : {}),
+          requestId,
+        })
+      }
+      const payload = await response.json().catch(() => {
+        throw new OpenAiDictionaryError('OpenAI returned invalid JSON', { kind: 'invalid_response', requestId })
+      }) as Record<string, unknown>
+      const outputText = Array.isArray(payload.output)
+        ? payload.output.flatMap((item) => {
+          if (!item || typeof item !== 'object') return []
+          const content = (item as Record<string, unknown>).content
+          if (!Array.isArray(content)) return []
+          return content.flatMap((part) => part && typeof part === 'object'
+            && (part as Record<string, unknown>).type === 'output_text'
+            && typeof (part as Record<string, unknown>).text === 'string'
+            ? [(part as Record<string, unknown>).text as string]
+            : [])
+        }).join('\n')
+        : ''
+      if (!outputText.trim()) {
+        throw new OpenAiDictionaryError('OpenAI response has no output text', { kind: 'invalid_response', requestId })
+      }
+      try {
+        return parseResult(JSON.parse(outputText))
+      } catch {
+        throw new OpenAiDictionaryError('OpenAI response has invalid dictionary data or translations', { kind: 'invalid_response', requestId })
+      }
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') throw new Error('OpenAI request timed out')
-      throw error
+      if (error instanceof OpenAiDictionaryError) throw error
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new OpenAiDictionaryError('OpenAI request timed out', { kind: 'timeout', requestId })
+      }
+      throw new OpenAiDictionaryError('OpenAI request failed before a response was received', {
+        kind: 'network',
+        requestId,
+      })
     } finally {
       clearTimeout(timeout)
     }

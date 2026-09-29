@@ -17,6 +17,9 @@ npm install
 `TELEGRAM_BOT_TOKEN` is the token issued by BotFather. `DATABASE_PATH` defaults to
 `./data/vocabulary.db`.
 
+Set `OPENAI_API_KEY` to enable OpenAI translations. If it is unset, the bot uses
+the mock dictionary. `OPENAI_MODEL` defaults to `gpt-4o-mini`.
+
 ## Telegram bot setup
 
 Create a bot with BotFather and put its token in `TELEGRAM_BOT_TOKEN`. The bot
@@ -251,7 +254,8 @@ npm run dev
 ## Production deployment
 
 On the Beelink host, create persistent directories and configure `.env` with
-`TELEGRAM_BOT_TOKEN` and `OPENAI_API_KEY`:
+`TELEGRAM_BOT_TOKEN` and `OPENAI_API_KEY`. After building, verify the API from
+the same environment as the application with `npm run dictionary:check`:
 
 ```bash
 sudo mkdir -p /srv/vocabulary/data /srv/vocabulary/backups
@@ -263,6 +267,11 @@ docker compose logs -f vocabulary-app
 
 The database is stored in `/srv/vocabulary/data` and survives container
 recreation. Telegram sessions are stored in the same SQLite database.
+
+`npm run dictionary:check` makes one EN→RU request for `minor`, prints the
+translation or safe failure metadata, and does not write to the database. Run it
+after build with the service's environment loaded; do not paste the API key into
+the command line.
 
 Create a daily local backup with host cron:
 
@@ -298,6 +307,6 @@ npm run build
 ## Current scope
 
 The current milestone ends at Telegram review. It includes Telegram onboarding,
-language pairs, vocabulary capture with the mock dictionary, inbox, learning,
-and review history. Web, scheduler, Docker, backup, and real dictionary
-providers are outside this milestone.
+language pairs, vocabulary capture with OpenAI enrichment (mock fallback when
+`OPENAI_API_KEY` is absent), inbox, learning, and review history. Web, scheduler,
+and daily notifications are outside this milestone.

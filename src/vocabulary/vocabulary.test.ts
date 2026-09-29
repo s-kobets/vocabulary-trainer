@@ -3,6 +3,7 @@ import test from 'node:test'
 import Database from 'better-sqlite3'
 import path from 'node:path'
 import { runMigrations } from '../db/database'
+import { OpenAiDictionaryError } from '../dictionary/dictionary.errors'
 import type { DictionaryInput, DictionaryResult } from '../dictionary/dictionary.types'
 import type { LanguagePair } from '../languages/language-pair.types'
 import { VocabularyRepository } from './vocabulary.repository'
@@ -172,6 +173,28 @@ test('captures a normalized item with dictionary data in inbox', async () => {
     sourceLanguage: 'en',
     targetLanguage: 'ru',
   }])
+  db.close()
+})
+
+test('logs sanitized metadata when immediate dictionary enrichment fails', async () => {
+  const { db, repository } = createVocabulary()
+  const loggerCalls: unknown[][] = []
+  const service = new VocabularyService(repository, {
+    lookup: async () => {
+      throw new OpenAiDictionaryError('OpenAI request failed', {
+        kind: 'http', status: 429, apiCode: 'insufficient_quota', requestId: 'req-test',
+      })
+    },
+  }, { error: (...args: unknown[]) => loggerCalls.push(args) })
+
+  const result = await service.addText('user-a', createPair(), 'sensitive word')
+  const fields = loggerCalls[0][0] as Record<string, unknown>
+
+  assert.equal(result.pending, true)
+  assert.equal(fields.status, 429)
+  assert.equal(fields.apiCode, 'insufficient_quota')
+  assert.equal(fields.requestId, 'req-test')
+  assert.equal(JSON.stringify(fields).includes('sensitive word'), false)
   db.close()
 })
 

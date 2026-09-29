@@ -1,6 +1,9 @@
 import type { DictionaryProvider } from '../dictionary/dictionary.types'
+import { dictionaryFailureFields } from '../dictionary/dictionary.errors'
 import type { VocabularyRepository } from './vocabulary.repository'
 import type { LanguagePairRepository } from '../languages/language-pair.repository'
+
+type ErrorLogger = { error: (fields: Record<string, string | number>, message: string) => void }
 
 export class EnrichmentWorker {
   private timer: NodeJS.Timeout | undefined
@@ -11,6 +14,7 @@ export class EnrichmentWorker {
     private readonly repository: VocabularyRepository,
     private readonly provider: DictionaryProvider,
     private readonly languagePairs: LanguagePairRepository,
+    private readonly logger?: ErrorLogger,
     private readonly intervalMs = 60_000,
   ) {}
 
@@ -42,6 +46,7 @@ export class EnrichmentWorker {
           const result = await this.provider.lookup({ text: item.text, ...pair })
           this.repository.updateEnrichment(item.userId, item.id, { ...result, examples: result.examples ?? [], status: 'ready' })
         } catch (error) {
+          this.logger?.error({ itemId: item.id, ...dictionaryFailureFields(error) }, 'Dictionary enrichment retry failed')
           this.repository.updateEnrichment(item.userId, item.id, { translations: [], examples: [], status: 'pending', error: error instanceof Error ? error.name : 'ProviderError' })
         }
       }

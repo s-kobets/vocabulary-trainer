@@ -91,6 +91,10 @@ export async function start(): Promise<void> {
       throw error
     }
 
+    app = createHttpApp(db)
+    app.log.info('Database migrations complete')
+    const logger = app.log as unknown as { error: (...args: unknown[]) => void }
+
     const users = new UserRepository(db)
     const telegramAccounts = new TelegramAccountRepository(db)
     const userSettings = new UserSettingsRepository(db)
@@ -99,15 +103,13 @@ export async function start(): Promise<void> {
     const reviews = new ReviewRepository(db)
     const userService = new UserService(db, users, telegramAccounts, userSettings)
     const languagePairService = new LanguagePairService(db, languagePairs)
-     const dictionaryProvider = config.openAiApiKey
-       ? new OpenAiDictionaryProvider({ apiKey: config.openAiApiKey, model: config.openAiModel })
-       : new MockDictionaryProvider()
-     const vocabularyService = new VocabularyService(vocabulary, dictionaryProvider)
+    const dictionaryProvider = config.openAiApiKey
+      ? new OpenAiDictionaryProvider({ apiKey: config.openAiApiKey, model: config.openAiModel })
+      : new MockDictionaryProvider()
+    app.log.info({ provider: config.openAiApiKey ? 'openai' : 'mock', model: config.openAiApiKey ? config.openAiModel : undefined }, 'Dictionary provider configured')
+    const vocabularyService = new VocabularyService(vocabulary, dictionaryProvider, logger)
     const reviewService = new ReviewService(db, reviews, vocabulary)
 
-    app = createHttpApp(db)
-    app.log.info('Database migrations complete')
-    const logger = app.log as unknown as { error: (...args: unknown[]) => void }
     const dependencies = {
       userService,
       db,
@@ -117,7 +119,7 @@ export async function start(): Promise<void> {
       logger,
     }
     bot = createBot(config.telegramBotToken, dependencies)
-    enrichmentWorker = new EnrichmentWorker(vocabulary, dictionaryProvider, languagePairs)
+    enrichmentWorker = new EnrichmentWorker(vocabulary, dictionaryProvider, languagePairs, logger)
     process.once('SIGINT', sigintHandler)
     process.once('SIGTERM', sigtermHandler)
 
