@@ -4,6 +4,12 @@ import { isDatabaseHealthy, type SqliteDatabase } from './db/database'
 export function createHttpApp(db: SqliteDatabase): FastifyInstance {
   const app = Fastify({ logger: true })
 
+  app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (request, body, done) => {
+    const values: Record<string, string> = {}
+    new URLSearchParams(body as string).forEach((value, key) => { values[key] = value })
+    done(null, values)
+  })
+
   app.get('/health', async (_request, reply) => {
     if (!isDatabaseHealthy(db)) {
       return reply.code(503).send({ status: 'error' })

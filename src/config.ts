@@ -5,6 +5,7 @@ export type Config = {
   port: number
   databasePath: string
   telegramBotToken: string
+  telegramBotUsername?: string
   appUrl?: string
   sessionSecret?: string
   openAiApiKey?: string
@@ -27,6 +28,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port,
     databasePath: env.DATABASE_PATH ?? './data/vocabulary.db',
     telegramBotToken,
+    telegramBotUsername: env.TELEGRAM_BOT_USERNAME?.trim().replace(/^@/, ''),
     appUrl: env.APP_URL,
     sessionSecret: env.SESSION_SECRET,
     openAiApiKey: env.OPENAI_API_KEY?.trim(),

@@ -6,6 +6,7 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY scripts ./scripts
 COPY src ./src
+COPY public ./public
 RUN npm run build
 RUN npm prune --omit=dev
 
@@ -15,6 +16,7 @@ ENV NODE_ENV=production
 COPY package*.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/public ./public
 RUN mkdir -p /app/data
 EXPOSE 3000
 CMD ["node", "dist/server.js"]

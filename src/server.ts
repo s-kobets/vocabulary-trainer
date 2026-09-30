@@ -19,6 +19,8 @@ import { UserService } from './users/user.service'
 import { UserSettingsRepository } from './users/user-settings.repository'
 import { VocabularyRepository } from './vocabulary/vocabulary.repository'
 import { VocabularyService } from './vocabulary/vocabulary.service'
+import { SessionRepository } from './web/session.repository'
+import { registerWebRoutes } from './web/routes'
 
 function errorMetadata(error: unknown, secrets: Array<string | undefined> = []): Record<string, string> {
   if (!(error instanceof Error)) return { errorName: typeof error, errorMessage: 'Unknown failure' }
@@ -112,6 +114,16 @@ export async function start(): Promise<void> {
     app.log.info({ provider: config.openAiApiKey ? 'openai' : 'mock', model: config.openAiApiKey ? config.openAiModel : undefined }, 'Dictionary provider configured')
     const vocabularyService = new VocabularyService(vocabulary, dictionaryProvider, logger)
     const reviewService = new ReviewService(db, reviews, vocabulary)
+
+    registerWebRoutes(app, {
+      config,
+      userService,
+      telegramAccounts,
+      sessions: new SessionRepository(db),
+      languagePairService,
+      vocabularyService,
+      reviewService,
+    })
 
     const dependencies = {
       userService,

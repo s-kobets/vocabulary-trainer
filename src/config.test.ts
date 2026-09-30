@@ -11,6 +11,7 @@ test('loadConfig applies development defaults', () => {
   assert.equal(config.port, 3000)
   assert.equal(config.databasePath, './data/vocabulary.db')
   assert.equal(config.telegramBotToken, 'token')
+  assert.equal(config.telegramBotUsername, undefined)
 })
 
 test('loadConfig fails with the missing required token name', () => {
@@ -26,6 +27,7 @@ test('loadConfig parses explicit values and preserves optional web settings', ()
     PORT: '4310',
     DATABASE_PATH: ':memory:',
     TELEGRAM_BOT_TOKEN: 'token',
+    TELEGRAM_BOT_USERNAME: '@vocabulary_test_bot',
     APP_URL: 'http://localhost:4310',
     SESSION_SECRET: 'secret',
     OPENAI_API_KEY: 'openai-key',
@@ -37,6 +39,7 @@ test('loadConfig parses explicit values and preserves optional web settings', ()
     port: 4310,
     databasePath: ':memory:',
     telegramBotToken: 'token',
+    telegramBotUsername: 'vocabulary_test_bot',
     appUrl: 'http://localhost:4310',
     sessionSecret: 'secret',
     openAiApiKey: 'openai-key',

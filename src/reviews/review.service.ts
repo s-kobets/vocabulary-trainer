@@ -39,6 +39,14 @@ export class ReviewService {
     return this.reviews.findDueForUser(userId, now, limit, languagePairId)
   }
 
+  countDue(userId: string, now: Date, languagePairId: string): number {
+    return this.reviews.countDueForPair(userId, languagePairId, now)
+  }
+
+  countReviewedToday(userId: string, now: Date): number {
+    return this.reviews.countReviewedToday(userId, now)
+  }
+
   answer(userId: string, itemId: string, result: ReviewResult, now: Date): ReviewOutcome {
     return this.db.transaction(() => {
       const item = this.vocabulary.findByIdForUser(userId, itemId)

@@ -17,6 +17,11 @@ npm install
 `TELEGRAM_BOT_TOKEN` is the token issued by BotFather. `DATABASE_PATH` defaults to
 `./data/vocabulary.db`.
 
+Set `TELEGRAM_BOT_USERNAME` (without `@`) to enable website sign-in. Configure
+the website domain for Telegram Login in BotFather, then set `APP_URL` to the
+public site URL. In BotFather, use `/setdomain`, select your bot, and enter the
+website hostname.
+
 Set `OPENAI_API_KEY` to enable OpenAI translations. If it is unset, the bot uses
 the mock dictionary. `OPENAI_MODEL` defaults to `gpt-4o-mini`.
 
@@ -24,6 +29,14 @@ the mock dictionary. `OPENAI_MODEL` defaults to `gpt-4o-mini`.
 
 Create a bot with BotFather and put its token in `TELEGRAM_BOT_TOKEN`. The bot
 uses Telegram long polling.
+
+## Website
+
+Open `http://localhost:3000` to use the web vocabulary trainer. Sign in with the
+Telegram account associated with your vocabulary. The site shares the same words
+and review schedule as the bot; it also supports creating a language pair,
+adding words, moving them into Learning, and completing due reviews. Website
+sessions last 30 days and are stored in SQLite.
 
 ## Telegram commands
 
@@ -278,7 +291,7 @@ the same environment as the application with `npm run dictionary:check`:
 sudo mkdir -p /srv/vocabulary/data /srv/vocabulary/backups
 docker compose build
 docker compose up -d
-curl --fail http://127.0.0.1:3000/health
+  curl --fail http://127.0.0.1:3002/health
 docker compose logs -f vocabulary-app
 ```
 
@@ -323,7 +336,6 @@ npm run build
 
 ## Current scope
 
-The current milestone ends at Telegram review. It includes Telegram onboarding,
-language pairs, vocabulary capture with OpenAI enrichment (mock fallback when
-`OPENAI_API_KEY` is absent), inbox, learning, and review history. Web, scheduler,
-and daily notifications are outside this milestone.
+The app supports Telegram and web workflows over one SQLite vocabulary. Web
+includes Telegram sign-in, dashboard, vocabulary management, language pairs,
+and spaced-repetition review. Daily reminders are configured through Telegram.
