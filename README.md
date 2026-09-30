@@ -37,6 +37,10 @@ uses Telegram long polling.
 - `/learning` shows up to 10 words currently being learned for the active pair,
   reports the full count, and provides a button to review due words.
 - `/review` starts a review session for due words.
+- `/reminder` shows daily reminder status. Use `/reminder on`, `/reminder pause`,
+  or `/reminder time HH:MM` to manage it.
+- `/timezone Area/Location` sets the timezone used for reminder delivery, for
+  example `/timezone Europe/Moscow`.
 - `/delete` deletes one word immediately or asks for confirmation before bulk deletion.
 - `/edit <word>` replaces translations for a word in the active language pair.
 
@@ -123,7 +127,20 @@ pair. The message also shows the complete Learning count.
 `/learning` does not change any word or review state. If learning words exist,
 press `Review due words` to start a review session for words that are due now.
 
-### 5. Review Due Words
+### 5. Configure Daily Reminders
+
+Daily reminders start paused. Use `/reminder on` to enable them; `/reminder`
+shows current status, local time, and timezone. Set a time with
+`/reminder time 08:30` and timezone with `/timezone Europe/Moscow`. Times use
+24-hour `HH:MM`; timezone must be an IANA zone. Defaults are `09:00` and `UTC`.
+
+The bot checks once per minute and sends a reminder only when reviews are due in
+the active language pair. Each reminder offers a button to start reviewing. If
+Telegram rejects delivery, the bot retries after 15 minutes, up to three attempts
+for that local day; after three failures, attempts resume on the next day. Use
+`/reminder pause` to pause delivery; `/reminder on` resumes it.
+
+### 6. Review Due Words
 
 You can start a review in either way:
 
@@ -139,7 +156,7 @@ Each answer updates the word's review schedule. Only due words are included in
 the session. A word can be reviewed again later when its next review time is
 reached.
 
-### 6. Reach Known
+### 7. Reach Known
 
 Words move from `Learning` to `Known` after enough successful reviews at the
 highest review level. If you answer incorrectly for a `Known` word, it can move
@@ -154,7 +171,7 @@ Learning: 12
 Known: 5
 ```
 
-### 7. Delete Words
+### 8. Delete Words
 
 Delete one word immediately with:
 
@@ -178,7 +195,7 @@ The bot asks for confirmation before deleting the batch. Empty lines and
 duplicate entries are ignored. Deleting a word also removes its review schedule
 and review history.
 
-### 8. Edit Translations
+### 9. Edit Translations
 
 Replace translations on an existing word without deleting its card:
 

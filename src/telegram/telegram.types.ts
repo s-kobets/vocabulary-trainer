@@ -6,6 +6,7 @@ import type { UserService } from '../users/user.service'
 import type { VocabularyService } from '../vocabulary/vocabulary.service'
 import type { SqliteDatabase } from '../db/database'
 import type { DictionaryProvider } from '../dictionary/dictionary.types'
+import type { UserSettingsRepository } from '../users/user-settings.repository'
 
 export type BotSession = {
   onboarding?: {
@@ -41,6 +42,7 @@ export type BotDependencies = {
   db?: SqliteDatabase
   dictionaryProvider?: DictionaryProvider
   userService: UserService
+  userSettingsRepository: UserSettingsRepository
   languagePairService: LanguagePairService
   vocabularyService: VocabularyService
   reviewService: ReviewService

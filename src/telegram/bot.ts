@@ -4,6 +4,7 @@ import { registerReviewHandlers } from './review.handlers'
 import { registerVocabularyHandlers } from './vocabulary.handlers'
 import { registerAccountHandlers } from './account.handlers'
 import { registerLanguageHandlers } from './languages.handlers'
+import { registerReminderHandlers } from './reminder.handlers'
 import type { BotContext, BotDependencies, BotSession } from './telegram.types'
 import { createSqliteSessionMiddleware } from './sqlite-session'
 
@@ -16,6 +17,7 @@ export function createBot(token: string, dependencies: BotDependencies): Telegra
   registerAccountHandlers(bot, dependencies)
   registerLanguageHandlers(bot, dependencies)
   registerVocabularyHandlers(bot, dependencies)
+  registerReminderHandlers(bot, dependencies)
   bot.catch(async (error, ctx) => {
     const errorType = error instanceof Error ? 'Error' : typeof error
     dependencies.logger.error({ updateId: ctx.update.update_id, errorType }, 'Telegram update failed')

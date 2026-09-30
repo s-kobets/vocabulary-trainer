@@ -217,6 +217,19 @@ export class ReviewRepository {
     return row.count
   }
 
+  countDueForPair(userId: string, languagePairId: string, now: Date): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM review_states
+      JOIN vocabulary_items ON vocabulary_items.id = review_states.vocabulary_item_id
+      WHERE review_states.user_id = ? AND vocabulary_items.user_id = ?
+        AND vocabulary_items.language_pair_id = ?
+        AND vocabulary_items.status IN ('learning', 'known')
+        AND review_states.next_review_at <= ?
+    `).get(userId, userId, languagePairId, now.toISOString()) as { count: number }
+    return row.count
+  }
+
   countReviewedToday(userId: string, now: Date): number {
     const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)

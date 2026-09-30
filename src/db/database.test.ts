@@ -31,7 +31,7 @@ test('migrations create the schema and are idempotent', () => {
     'users',
     'vocabulary_items',
   ])
-  assert.deepEqual(migrations.map((row) => row.version), ['001', '002'])
+  assert.deepEqual(migrations.map((row) => row.version), ['001', '002', '003'])
   assert.equal(isDatabaseHealthy(db), true)
   db.close()
 })
@@ -53,6 +53,17 @@ test('persistent session and enrichment migration preserves existing vocabulary'
   const item = db.prepare('SELECT enrichment_status, enrichment_attempts FROM vocabulary_items WHERE id = ?').get('item') as { enrichment_status: string; enrichment_attempts: number }
   assert.deepEqual(item, { enrichment_status: 'ready', enrichment_attempts: 0 })
   assert.deepEqual(db.prepare('SELECT * FROM telegram_sessions').all(), [])
+  db.close()
+})
+
+test('daily reminder migration adds durable attempt fields with safe defaults', () => {
+  const db = new Database(':memory:')
+  runMigrations(db, migrationDirectory)
+  const columns = db.prepare('PRAGMA table_info(user_settings)').all() as { name: string; dflt_value: string | null }[]
+  assert.ok(columns.some((column) => column.name === 'daily_review_attempt_date'))
+  assert.ok(columns.some((column) => column.name === 'daily_review_delivered_date'))
+  assert.ok(columns.some((column) => column.name === 'daily_review_last_attempt_at'))
+  assert.equal(columns.find((column) => column.name === 'daily_review_attempt_count')?.dflt_value, '0')
   db.close()
 })
 

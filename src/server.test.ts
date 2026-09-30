@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert'
 import test from 'node:test'
 import { Telegraf } from 'telegraf'
 import { start } from './server'
+import { ReminderWorker } from './reminders/reminder.worker'
 
 test('runtime starts health server without contacting Telegram and shuts down once', async () => {
   const previous = {
@@ -183,6 +184,49 @@ test('signal during Telegram polling shuts down the running HTTP server', async 
   } finally {
     Telegraf.prototype.launch = launch
     Telegraf.prototype.stop = stop
+    if (previous.databasePath === undefined) delete process.env.DATABASE_PATH
+    else process.env.DATABASE_PATH = previous.databasePath
+    if (previous.token === undefined) delete process.env.TELEGRAM_BOT_TOKEN
+    else process.env.TELEGRAM_BOT_TOKEN = previous.token
+    if (previous.port === undefined) delete process.env.PORT
+    else process.env.PORT = previous.port
+  }
+})
+
+test('runtime starts and stops the reminder worker with the application', async () => {
+  const previous = {
+    databasePath: process.env.DATABASE_PATH,
+    token: process.env.TELEGRAM_BOT_TOKEN,
+    port: process.env.PORT,
+  }
+  const launch = Telegraf.prototype.launch
+  const stop = Telegraf.prototype.stop
+  const reminderStart = ReminderWorker.prototype.start
+  const reminderStop = ReminderWorker.prototype.stop
+  let startCalls = 0
+  let stopCalls = 0
+
+  process.env.DATABASE_PATH = ':memory:'
+  process.env.TELEGRAM_BOT_TOKEN = 'test-token'
+  process.env.PORT = '32129'
+  ;(Telegraf.prototype as unknown as { launch: (onLaunch?: () => void) => Promise<void> }).launch = async () => undefined
+  ;(Telegraf.prototype as unknown as { stop: (reason?: string) => void }).stop = () => undefined
+  ReminderWorker.prototype.start = function () { startCalls++ }
+  ReminderWorker.prototype.stop = async function () { stopCalls++ }
+
+  try {
+    await start()
+    assert.equal(startCalls, 1)
+    process.emit('SIGTERM')
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(stopCalls, 1)
+  } finally {
+    process.emit('SIGTERM')
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    Telegraf.prototype.launch = launch
+    Telegraf.prototype.stop = stop
+    ReminderWorker.prototype.start = reminderStart
+    ReminderWorker.prototype.stop = reminderStop
     if (previous.databasePath === undefined) delete process.env.DATABASE_PATH
     else process.env.DATABASE_PATH = previous.databasePath
     if (previous.token === undefined) delete process.env.TELEGRAM_BOT_TOKEN

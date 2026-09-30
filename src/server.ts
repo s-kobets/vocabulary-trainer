@@ -6,6 +6,7 @@ import { openDatabase, runMigrations, type SqliteDatabase } from './db/database'
 import { MockDictionaryProvider } from './dictionary/mock-dictionary.provider'
 import { OpenAiDictionaryProvider } from './dictionary/openai-dictionary.provider'
 import { EnrichmentWorker } from './vocabulary/enrichment.worker'
+import { ReminderWorker } from './reminders/reminder.worker'
 import { registerCommandMenu } from './telegram/commands'
 import { LanguagePairRepository } from './languages/language-pair.repository'
 import { LanguagePairService } from './languages/language-pair.service'
@@ -42,6 +43,7 @@ export async function start(): Promise<void> {
   let app: ReturnType<typeof createHttpApp> | undefined
   let bot: ReturnType<typeof createBot> | undefined
   let enrichmentWorker: EnrichmentWorker | undefined
+  let reminderWorker: ReminderWorker | undefined
   let cleanupStarted = false
   let shutdownPromise: Promise<void> | undefined
   let httpStarted = false
@@ -68,6 +70,7 @@ export async function start(): Promise<void> {
         app?.log.error({ phase: 'shutdown', ...errorMetadata(error, [config.telegramBotToken, config.sessionSecret]) }, 'Telegram shutdown failed')
       }
     }
+    await reminderWorker?.stop()
     await enrichmentWorker?.stop()
     if (app) {
       try {
@@ -112,6 +115,7 @@ export async function start(): Promise<void> {
 
     const dependencies = {
       userService,
+      userSettingsRepository: userSettings,
       db,
       languagePairService,
       vocabularyService,
@@ -120,6 +124,13 @@ export async function start(): Promise<void> {
     }
     bot = createBot(config.telegramBotToken, dependencies)
     enrichmentWorker = new EnrichmentWorker(vocabulary, dictionaryProvider, languagePairs, logger)
+    reminderWorker = new ReminderWorker({
+      settings: userSettings,
+      languagePairs,
+      reviews,
+      send: (telegramUserId, text, extra) => bot!.telegram.sendMessage(telegramUserId, text, extra),
+      logger,
+    })
     process.once('SIGINT', sigintHandler)
     process.once('SIGTERM', sigtermHandler)
 
@@ -145,6 +156,7 @@ export async function start(): Promise<void> {
       }
     })
     enrichmentWorker.start()
+    reminderWorker.start()
     if (cleanupStarted) {
       if (shutdownPromise) await shutdownPromise
       return

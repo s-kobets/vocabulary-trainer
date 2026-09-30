@@ -9,6 +9,8 @@ const commands = [
   { command: 'inbox', description: 'Show Inbox words' },
   { command: 'learning', description: 'Show learning words' },
   { command: 'review', description: 'Review due words' },
+  { command: 'reminder', description: 'Manage daily review reminders' },
+  { command: 'timezone', description: 'Set reminder timezone' },
   { command: 'delete', description: 'Delete words' },
   { command: 'edit', description: 'Edit word translations' },
 ]

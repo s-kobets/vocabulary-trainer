@@ -136,6 +136,31 @@ test('filters due reviews by language pair when requested', () => {
   db.close()
 })
 
+test('counts due learning and known reviews only in the requested pair', () => {
+  const { db, vocabulary, reviews, service } = createReviews()
+  db.prepare('INSERT INTO language_pairs (id, user_id, source_language, target_language, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run('pair-c', 'user-a', 'de', 'ru', new Date().toISOString())
+  const learning = createItem(vocabulary, 'user-a', 'learning')
+  const known = createItem(vocabulary, 'user-a', 'known')
+  const otherPair = vocabulary.create({
+    userId: 'user-a', languagePairId: 'pair-c', text: 'other', normalizedText: 'other',
+    itemType: 'word', translations: ['other'], examples: [], status: 'inbox',
+  })
+  const inbox = createItem(vocabulary, 'user-a', 'inbox')
+  const now = new Date('2026-09-18T12:00:00.000Z')
+  service.startLearning('user-a', 'pair-a', now)
+  service.startLearning('user-a', 'pair-c', now)
+  vocabulary.update('user-a', known.id, { status: 'known' })
+  reviews.updateState('user-a', inbox.id, { nextReviewAt: '2026-09-18T11:00:00.000Z' })
+  reviews.updateState('user-a', otherPair.id, { nextReviewAt: '2026-09-18T11:00:00.000Z' })
+  reviews.updateState('user-a', learning.id, { nextReviewAt: '2026-09-18T13:00:00.000Z' })
+
+  assert.equal(reviews.countDueForPair('user-a', 'pair-a', now), 2)
+  assert.equal(reviews.countDueForPair('user-a', 'pair-c', now), 1)
+  assert.equal(reviews.countDueForPair('user-b', 'pair-a', now), 0)
+  db.close()
+})
+
 test('answers atomically update scoped state and preserve source-to-target history', () => {
   const { db, vocabulary, reviews, service } = createReviews()
   const item = createItem(vocabulary, 'user-a', 'alpha')
