@@ -1,6 +1,6 @@
 import type { SqliteDatabase } from '../db/database'
 import { VocabularyRepository } from '../vocabulary/vocabulary.repository'
-import { REVIEW_INTERVALS, calculateNextReview, type ReviewResult } from './review.algorithm'
+import { calculateNextReview, KNOWN_AFTER_CORRECT_ANSWERS, type ReviewResult } from './review.algorithm'
 import { ReviewRepository } from './review.repository'
 import type { DueReview, ReviewOutcome } from './review.types'
 
@@ -41,6 +41,10 @@ export class ReviewService {
     return this.reviews.findDueForUser(userId, now, limit, languagePairId)
   }
 
+  getLevels(userId: string, languagePairId: string): Map<string, number> {
+    return this.reviews.findLevelsForUserAndPair(userId, languagePairId)
+  }
+
   countDue(userId: string, now: Date, languagePairId: string): number {
     return this.reviews.countDueForPair(userId, languagePairId, now)
   }
@@ -72,7 +76,7 @@ export class ReviewService {
       })
 
       let status = item.status
-      if (result === 'correct' && next.level === REVIEW_INTERVALS.length - 1) status = 'known'
+      if (result === 'correct' && next.level >= KNOWN_AFTER_CORRECT_ANSWERS) status = 'known'
       if (result === 'incorrect' && item.status === 'known') status = 'learning'
       if (status !== item.status) this.vocabulary.update(userId, itemId, { status })
 

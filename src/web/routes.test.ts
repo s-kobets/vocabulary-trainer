@@ -79,6 +79,9 @@ test('web auth shares user data across vocabulary capture and review', async (t)
   const stylesheet = await app.inject({ method: 'GET', url: '/app.css' })
   assert.equal(stylesheet.statusCode, 200)
   assert.match(stylesheet.headers['content-type'] as string, /text\/css/)
+  const pronunciationScript = await app.inject({ method: 'GET', url: '/pronunciation.js' })
+  assert.equal(pronunciationScript.statusCode, 200)
+  assert.match(pronunciationScript.body, /speechSynthesis/)
 
   const attempt = await beginLogin(app)
   const auth = await app.inject({
@@ -122,9 +125,14 @@ test('web auth shares user data across vocabulary capture and review', async (t)
   assert.ok(vocabularyService.findByText(user.id, pair.id, 'take place'))
   const learn = await app.inject({ method: 'POST', url: `/vocabulary/${item.id}/learn`, headers: { cookie } })
   assert.equal(learn.statusCode, 303)
+  const learningVocabulary = await app.inject({ method: 'GET', url: '/vocabulary', headers: { cookie } })
+  assert.match(learningVocabulary.body, /Верных подряд: 0 из 3/)
+  assert.match(learningVocabulary.body, /data-speak="serendipity"/)
 
   const review = await app.inject({ method: 'GET', url: '/review', headers: { cookie } })
   assert.match(review.body, /serendipity/)
+  assert.match(review.body, /Верных подряд: 0 из 3/)
+  assert.match(review.body, /data-speak="serendipity"/)
   const reveal = await app.inject({ method: 'POST', url: `/review/${item.id}/reveal`, headers: { cookie } })
   assert.match(reveal.body, /mock:ru/)
   const answer = await app.inject({
@@ -132,7 +140,24 @@ test('web auth shares user data across vocabulary capture and review', async (t)
     payload: 'result=correct',
   })
   assert.equal(answer.statusCode, 303)
+  assert.match(answer.headers.location as string, /notice=/)
   assert.equal(vocabularyService.findForUser(user.id, item.id)?.status, 'learning')
+  const progressedVocabulary = await app.inject({ method: 'GET', url: '/vocabulary', headers: { cookie } })
+  assert.match(progressedVocabulary.body, /Верных подряд: 1 из 3/)
+  const reviewAfterAnswer = await app.inject({
+    method: 'GET', url: answer.headers.location as string, headers: { cookie },
+  })
+  assert.match(reviewAfterAnswer.body, /Ответ принят: Изучаю · верных подряд 1 из 3/)
+
+  // Simulate a race: the card looked due when checked, but is no longer due when answered.
+  t.mock.method(ReviewService.prototype, 'getDue', () => [{ item }])
+  const staleAnswer = await app.inject({
+    method: 'POST', url: `/review/${item.id}/answer`, headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+    payload: 'result=correct',
+  })
+  assert.equal(staleAnswer.statusCode, 303)
+  assert.match(decodeURIComponent(staleAnswer.headers.location as string), /Карточка уже не ожидает повторения/)
+  t.mock.restoreAll()
 
   const logout = await app.inject({ method: 'POST', url: '/logout', headers: { cookie } })
   assert.equal(logout.statusCode, 302)

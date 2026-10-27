@@ -298,7 +298,7 @@ the same environment as the application with `npm run dictionary:check`:
 sudo mkdir -p /srv/vocabulary/data /srv/vocabulary/backups
 docker compose build
 docker compose up -d
-  curl --fail http://127.0.0.1:3002/health
+  curl --fail http://127.0.0.1:3003/health
 docker compose logs -f vocabulary-app
 ```
 

@@ -4,7 +4,8 @@ import path from 'node:path'
 import type { Config } from '../config'
 import { getLanguages } from '../languages/languages'
 import type { LanguagePairService } from '../languages/language-pair.service'
-import type { ReviewService } from '../reviews/review.service'
+import { KNOWN_AFTER_CORRECT_ANSWERS } from '../reviews/review.algorithm'
+import { ReviewNotDueError, type ReviewService } from '../reviews/review.service'
 import type { UserService } from '../users/user.service'
 import type { TelegramAccountRepository } from '../users/telegram-account.repository'
 import type { VocabularyService } from '../vocabulary/vocabulary.service'
@@ -80,6 +81,10 @@ export function registerWebRoutes(app: FastifyInstance, dependencies: WebDepende
     readFileSync(path.resolve(process.cwd(), 'public/app.css'), 'utf8'),
   ))
 
+  app.get('/pronunciation.js', async (_request, reply) => reply.type('text/javascript; charset=utf-8').send(
+    readFileSync(path.resolve(process.cwd(), 'public/pronunciation.js'), 'utf8'),
+  ))
+
   app.get('/login', async (request, reply) => {
     reply.header('cache-control', 'no-store')
     const sessionId = cookieValue(request, COOKIE_NAME)
@@ -108,7 +113,7 @@ export function registerWebRoutes(app: FastifyInstance, dependencies: WebDepende
   })
 
   app.addHook('preHandler', async (request, reply) => {
-    if (request.url.startsWith('/health') || request.url.startsWith('/login') || request.url.startsWith('/auth/telegram') || request.url === '/app.css') return
+    if (request.url.startsWith('/health') || request.url.startsWith('/login') || request.url.startsWith('/auth/telegram') || request.url === '/app.css' || request.url === '/pronunciation.js') return
     const sessionId = cookieValue(request, COOKIE_NAME)
     const userId = sessionId ? sessions.findUserId(sessionId) : null
     if (!userId) {
@@ -180,7 +185,8 @@ export function registerWebRoutes(app: FastifyInstance, dependencies: WebDepende
     const items = vocabularyService.listForUser(userId, { languagePairId: pair.id, ...(status ? { status } : {}) })
       .filter((item) => !query.q || item.text.toLocaleLowerCase().includes(query.q.toLocaleLowerCase()))
     return reply.type('text/html; charset=utf-8').send(renderVocabulary({
-      pair, pairs: languagePairService.listForUser(userId), items, status, query: query.q,
+      pair, pairs: languagePairService.listForUser(userId), items,
+      reviewLevels: reviewService.getLevels(userId, pair.id), status, query: query.q,
       message: query.notice,
     }))
   })
@@ -212,6 +218,7 @@ export function registerWebRoutes(app: FastifyInstance, dependencies: WebDepende
     const due = reviewService.getDue(userId, new Date(), 50, pair.id)
     return reply.type('text/html; charset=utf-8').send(renderReview({
       pair, pairs: languagePairService.listForUser(userId), due,
+      sourceLanguageCode: pair.sourceLanguage,
       message: queryString(request).notice,
     }))
   })
@@ -225,6 +232,7 @@ export function registerWebRoutes(app: FastifyInstance, dependencies: WebDepende
     if (!due.some((entry) => entry.item.id === id)) return redirect(reply, '/review', 'Карточка уже не ожидает повторения.')
     return reply.type('text/html; charset=utf-8').send(renderReview({
       pair, pairs: languagePairService.listForUser(userId), due, itemId: id, revealed: true,
+      sourceLanguageCode: pair.sourceLanguage,
     }))
   })
 
@@ -237,7 +245,19 @@ export function registerWebRoutes(app: FastifyInstance, dependencies: WebDepende
     if (result !== 'correct' && result !== 'incorrect') return redirect(reply, '/review', 'Выберите один из вариантов ответа.')
     const currentDue = reviewService.getDue(userId, new Date(), 50, pair.id)
     if (!currentDue.some((entry) => entry.item.id === id)) return redirect(reply, '/review', 'Карточка уже не ожидает повторения.')
-    reviewService.answer(userId, id, result, new Date())
-    return redirect(reply, '/review')
+    let outcome
+    try {
+      outcome = reviewService.answer(userId, id, result, new Date())
+    } catch (error) {
+      if (error instanceof ReviewNotDueError) return redirect(reply, '/review', 'Карточка уже не ожидает повторения.')
+      throw error
+    }
+    const progress = outcome.status === 'known'
+      ? 'Знаю · повторение по расписанию'
+      : `Изучаю · верных подряд ${outcome.levelAfter} из ${KNOWN_AFTER_CORRECT_ANSWERS}`
+    const message = result === 'correct'
+      ? `Ответ принят: ${progress}.`
+      : `Прогресс сброшен: ${progress}.`
+    return redirect(reply, '/review', message)
   })
 }

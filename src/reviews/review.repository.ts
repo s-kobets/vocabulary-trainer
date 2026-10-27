@@ -101,6 +101,17 @@ export class ReviewRepository {
     return row ? mapState(row) : null
   }
 
+  findLevelsForUserAndPair(userId: string, languagePairId: string): Map<string, number> {
+    const rows = this.db.prepare(`
+      SELECT review_states.vocabulary_item_id AS item_id, review_states.level
+      FROM review_states
+      JOIN vocabulary_items ON vocabulary_items.id = review_states.vocabulary_item_id
+      WHERE review_states.user_id = ? AND vocabulary_items.user_id = ?
+        AND vocabulary_items.language_pair_id = ?
+    `).all(userId, userId, languagePairId) as Array<{ item_id: string; level: number }>
+    return new Map(rows.map((row) => [row.item_id, row.level]))
+  }
+
   createState(userId: string, itemId: string, now: Date): ReviewState {
     const state = {
       id: crypto.randomUUID(),

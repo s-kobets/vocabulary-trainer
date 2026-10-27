@@ -213,7 +213,7 @@ test('a repeated answer cannot advance a card before its next due time', () => {
   db.close()
 })
 
-test('rejects another user and transitions known items at level six', () => {
+test('rejects another user and transitions items to known after three correct answers', () => {
   const { db, vocabulary, reviews, service } = createReviews()
   const itemA = createItem(vocabulary, 'user-a', 'alpha')
   const itemB = createItem(vocabulary, 'user-b', 'bravo')
@@ -222,12 +222,12 @@ test('rejects another user and transitions known items at level six', () => {
   assert.throws(() => service.answer('user-b', itemA.id, 'correct', now), /Review item is not available/)
 
   reviews.updateState('user-a', itemA.id, {
-    level: 6,
+    level: 2,
     nextReviewAt: now.toISOString(),
   })
   vocabulary.update('user-a', itemA.id, { status: 'learning' })
   const known = service.answer('user-a', itemA.id, 'correct', now)
-  assert.equal(known.levelAfter, 6)
+  assert.equal(known.levelAfter, 3)
   assert.equal(known.status, 'known')
   assert.equal(vocabulary.findByIdForUser('user-a', itemA.id)?.status, 'known')
 
@@ -235,8 +235,29 @@ test('rejects another user and transitions known items at level six', () => {
   assert.equal(stateB.level, 0)
   vocabulary.update('user-b', itemB.id, { status: 'known' })
   const learning = service.answer('user-b', itemB.id, 'incorrect', now)
+  assert.equal(learning.levelAfter, 0)
   assert.equal(learning.status, 'learning')
   assert.equal(vocabulary.findByIdForUser('user-b', itemB.id)?.status, 'learning')
+  db.close()
+})
+
+test('an incorrect answer resets learning progress before the next successful streak', () => {
+  const { db, vocabulary, reviews, service } = createReviews()
+  const item = createItem(vocabulary, 'user-a', 'streak')
+  const now = new Date('2026-09-18T12:00:00.000Z')
+  service.startLearning('user-a', 'pair-a', now)
+
+  const day = (n: number) => new Date(now.getTime() + n * 86_400_000)
+  service.answer('user-a', item.id, 'correct', day(0))
+  service.answer('user-a', item.id, 'correct', day(30))
+  const reset = service.answer('user-a', item.id, 'incorrect', day(60))
+
+  assert.equal(reset.levelAfter, 0)
+  assert.equal(reset.status, 'learning')
+  assert.equal(reviews.getState('user-a', item.id)?.level, 0)
+  const restarted = service.answer('user-a', item.id, 'correct', day(90))
+  assert.equal(restarted.status, 'learning')
+  assert.equal(restarted.levelAfter, 1)
   db.close()
 })
 

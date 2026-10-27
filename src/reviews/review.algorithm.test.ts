@@ -14,10 +14,17 @@ test('calculates exact intervals and lower boundary', () => {
     nextReviewAt: new Date('2026-09-21T12:00:00.000Z'),
   })
   assert.deepEqual(calculateNextReview({ level: 4, result: 'incorrect', now }), {
-    level: 3,
+    level: 0,
     nextReviewAt: new Date('2026-09-19T12:00:00.000Z'),
   })
   assert.deepEqual(calculateNextReview({ level: 0, result: 'incorrect', now }), {
+    level: 0,
+    nextReviewAt: new Date('2026-09-19T12:00:00.000Z'),
+  })
+})
+
+test('resets consecutive correct answers after an incorrect answer', () => {
+  assert.deepEqual(calculateNextReview({ level: 2, result: 'incorrect', now }), {
     level: 0,
     nextReviewAt: new Date('2026-09-19T12:00:00.000Z'),
   })
