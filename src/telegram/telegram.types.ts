@@ -23,6 +23,7 @@ export type BotSession = {
     sourceLanguage?: string
   }
   pendingDelete?: {
+    operationId: string
     userId: string
     languagePairId: string
     words: string[]

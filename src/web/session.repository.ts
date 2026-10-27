@@ -4,6 +4,17 @@ import type { SqliteDatabase } from '../db/database'
 export class SessionRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
+  createLoginAttempt(expiresAt: string): string {
+    const id = crypto.randomBytes(32).toString('base64url')
+    this.db.prepare('DELETE FROM web_login_attempts WHERE expires_at <= ?').run(new Date().toISOString())
+    this.db.prepare('INSERT INTO web_login_attempts (id, expires_at) VALUES (?, ?)').run(id, expiresAt)
+    return id
+  }
+
+  consumeLoginAttempt(id: string, now = new Date().toISOString()): boolean {
+    return this.db.prepare('DELETE FROM web_login_attempts WHERE id = ? AND expires_at > ?').run(id, now).changes === 1
+  }
+
   create(userId: string, expiresAt: string): string {
     const id = crypto.randomBytes(32).toString('base64url')
     this.db.prepare('INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')

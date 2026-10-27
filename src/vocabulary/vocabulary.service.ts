@@ -31,7 +31,7 @@ export class VocabularyService {
       return { item: existing, duplicate: true }
     }
 
-    let item = this.repository.create({
+    const item = this.repository.create({
       userId,
       languagePairId: pair.id,
       text: normalizedText,
@@ -42,27 +42,47 @@ export class VocabularyService {
       status: 'inbox',
       enrichmentStatus: 'pending',
     })
+    const enriched = await this.enrich(item, pair) ?? item
+    return { item: enriched, duplicate: false, ...(enriched.enrichmentStatus ? { pending: true } : {}) }
+  }
+
+  async addTexts(userId: string, pair: LanguagePair, texts: string[]): Promise<{ added: number; duplicates: number; failed: number }> {
+    const counts = { added: 0, duplicates: 0, failed: 0 }
+    for (const text of texts) {
+      try {
+        const result = await this.addText(userId, pair, text)
+        if (result.duplicate) counts.duplicates++
+        else counts.added++
+      } catch (error) {
+        counts.failed++
+        this.logger?.error(dictionaryFailureFields(error), 'Vocabulary import failed')
+      }
+    }
+    return counts
+  }
+
+  async enrich(item: VocabularyItem, pair: LanguagePair): Promise<VocabularyItem | null> {
+    const claimed = this.repository.claimPending(item.userId, item.id)
+    if (!claimed) return this.repository.findByIdForUser(item.userId, item.id)
     try {
       const dictionaryResult = await this.dictionaryProvider.lookup({
-        text: normalizedText,
+        text: claimed.text,
         sourceLanguage: pair.sourceLanguage,
         targetLanguage: pair.targetLanguage,
       })
-      item = this.repository.updateEnrichment(userId, item.id, {
+      return this.repository.updateEnrichment(item.userId, item.id, {
         ...dictionaryResult,
         examples: dictionaryResult.examples ?? [],
         status: 'ready',
-      }) ?? item
-      return { item, duplicate: false }
+      })
     } catch (error) {
       this.logger?.error({ itemId: item.id, ...dictionaryFailureFields(error) }, 'Dictionary enrichment failed')
-      item = this.repository.updateEnrichment(userId, item.id, {
+      return this.repository.updateEnrichment(item.userId, item.id, {
         translations: [],
         examples: [],
         status: 'pending',
         error: error instanceof Error ? error.name : 'ProviderError',
-      }) ?? item
-      return { item, duplicate: false, pending: true }
+      })
     }
   }
 

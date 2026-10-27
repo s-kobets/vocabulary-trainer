@@ -135,7 +135,7 @@ export async function start(): Promise<void> {
       logger,
     }
     bot = createBot(config.telegramBotToken, dependencies)
-    enrichmentWorker = new EnrichmentWorker(vocabulary, dictionaryProvider, languagePairs, logger)
+    enrichmentWorker = new EnrichmentWorker(vocabulary, vocabularyService, languagePairs, logger)
     reminderWorker = new ReminderWorker({
       settings: userSettings,
       languagePairs,

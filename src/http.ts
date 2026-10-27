@@ -2,7 +2,20 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { isDatabaseHealthy, type SqliteDatabase } from './db/database'
 
 export function createHttpApp(db: SqliteDatabase): FastifyInstance {
-  const app = Fastify({ logger: true })
+  const app = Fastify({
+    logger: {
+      serializers: {
+        req(request) {
+          return {
+            method: request.method,
+            url: request.url.split('?', 1)[0],
+            host: request.headers.host,
+            remoteAddress: request.ip,
+          }
+        },
+      },
+    },
+  })
 
   app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (request, body, done) => {
     const values: Record<string, string> = {}

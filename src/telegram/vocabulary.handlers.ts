@@ -1,4 +1,5 @@
 import { Markup, type Telegraf } from 'telegraf'
+import { randomUUID } from 'node:crypto'
 import { getCurrentUser } from './context'
 import type { LanguagePair } from '../languages/language-pair.types'
 import { normalizeText } from '../vocabulary/normalize'
@@ -136,25 +137,8 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
     }
 
     if (entries.length > 1) {
-      let added = 0
-      let duplicates = 0
-      let failed = 0
-
-      for (const entry of entries) {
-        try {
-          const result = await dependencies.vocabularyService.addText(user.id, pair, entry)
-          if (result.duplicate) duplicates++
-          else added++
-        } catch (error) {
-          failed++
-          dependencies.logger.error(
-            { errorType: error instanceof Error ? 'Error' : typeof error },
-            'Vocabulary provider failed',
-          )
-        }
-      }
-
-      await ctx.reply(renderBulkImportSummary({ added, duplicates, failed }))
+      const result = await dependencies.vocabularyService.addTexts(user.id, pair, entries)
+      await ctx.reply(renderBulkImportSummary(result))
       return
     }
 
@@ -267,10 +251,11 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       return
     }
 
-    ;(ctx.session ??= {}).pendingDelete = { userId: user.id, languagePairId: pair.id, words }
+    const operationId = randomUUID()
+    ;(ctx.session ??= {}).pendingDelete = { operationId, userId: user.id, languagePairId: pair.id, words }
     await ctx.reply(renderDeleteConfirmation(words.length), Markup.inlineKeyboard([[
-      Markup.button.callback('Confirm delete', 'vocabulary:delete:confirm'),
-      Markup.button.callback('Cancel', 'vocabulary:delete:cancel'),
+      Markup.button.callback('Confirm delete', `vocabulary:delete:confirm:${operationId}`),
+      Markup.button.callback('Cancel', `vocabulary:delete:cancel:${operationId}`),
     ]]))
   })
 
@@ -313,7 +298,7 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
           return
         }
 
-        ctx.session!.pendingTranslationEdit = {
+        ;(ctx.session ??= {}).pendingTranslationEdit = {
           userId: user.id,
           vocabularyItemId: item.id,
           languagePairId: pair.id,
@@ -389,10 +374,15 @@ export function registerVocabularyHandlers(bot: Telegraf<BotContext>, dependenci
       }
       return
     }
-    if (data === 'vocabulary:delete:cancel' || data === 'vocabulary:delete:confirm') {
+    const deleteMatch = /^vocabulary:delete:(cancel|confirm)(?::([^:]+))?$/.exec(data)
+    if (deleteMatch) {
       try {
         const pending = ctx.session?.pendingDelete
-        if (data === 'vocabulary:delete:cancel') {
+        if (!pending || !deleteMatch[2] || pending.operationId !== deleteMatch[2]) {
+          await ctx.reply('Delete request expired')
+          return
+        }
+        if (deleteMatch[1] === 'cancel') {
           if (ctx.session) ctx.session.pendingDelete = undefined
           await ctx.reply('Delete cancelled')
           return

@@ -3,6 +3,7 @@ import test from 'node:test'
 import type { Telegraf } from 'telegraf'
 import type { LanguagePair } from '../languages/language-pair.types'
 import type { VocabularyItem } from '../vocabulary/vocabulary.types'
+import { VocabularyService } from '../vocabulary/vocabulary.service'
 import { renderDuplicate, renderVocabularyAdded } from './messages'
 import { registerVocabularyHandlers } from './vocabulary.handlers'
 import type { BotContext, BotDependencies } from './telegram.types'
@@ -56,6 +57,9 @@ function createHarness(options: {
     languagePairService: { findDefaultForUser: () => options.activePair === undefined ? options.defaultPair === undefined ? pair : options.defaultPair : options.activePair },
     vocabularyService: {
       addText: options.addText ?? (async () => ({ item, duplicate: false })),
+      addTexts: (userId: string, pair: LanguagePair, texts: string[]) => VocabularyService.prototype.addTexts.call(
+        dependencies.vocabularyService, userId, pair, texts,
+      ),
       listForUser: (_userId: string, filters?: { status?: string; languagePairId?: string; limit?: number }) => {
         listFilters.push(filters)
         const items = filters?.status === 'learning' ? options.learningItems ?? [item] : currentInboxItems
@@ -145,6 +149,11 @@ function createHarness(options: {
     }
   },
   }
+}
+
+function deleteButton(harness: ReturnType<typeof createHarness>, index = 0): string {
+  const extra = harness.replies.at(-1)?.extra as { reply_markup: { inline_keyboard: { callback_data: string }[][] } }
+  return extra.reply_markup.inline_keyboard[0][index].callback_data
 }
 
 test('pure vocabulary responses include translation, inbox label, and duplicate text', () => {
@@ -718,7 +727,7 @@ test('/delete requests confirmation for unique multiline words and confirms them
   assert.equal(session.pendingDelete?.words.length, 2)
   assert.match(harness.replies.at(-1)?.text ?? '', /Delete 2 matching words\?/)
 
-  await harness.callback('vocabulary:delete:confirm', session)
+  await harness.callback(deleteButton(harness), session)
 
   assert.deepEqual(deleted, ['reliable', 'missing'])
   assert.equal(session.pendingDelete, undefined)
@@ -731,9 +740,37 @@ test('bulk delete cancel clears pending state without deleting', async () => {
   const session: BotContext['session'] = {}
 
   await harness.delete('/delete\nfirst\nsecond', session)
-  await harness.callback('vocabulary:delete:cancel', session)
+  await harness.callback(deleteButton(harness, 1), session)
 
   assert.equal(calls, 0)
   assert.equal(session.pendingDelete, undefined)
   assert.equal(harness.replies.at(-1)?.text, 'Delete cancelled')
+})
+
+test('stale and legacy delete buttons cannot delete or cancel a newer batch', async () => {
+  const deleted: string[] = []
+  const harness = createHarness({ deleteText: (_user, _pair, text) => { deleted.push(text); return true } })
+  const session: BotContext['session'] = {}
+  await harness.delete('/delete\na\nb', session)
+  const oldConfirm = deleteButton(harness)
+  const oldCancel = deleteButton(harness, 1)
+  await harness.delete('/delete\nc\nd', session)
+  const currentConfirm = deleteButton(harness)
+  assert.ok(Buffer.byteLength(currentConfirm) <= 64)
+  for (const callback of [oldConfirm, oldCancel, 'vocabulary:delete:confirm', 'vocabulary:delete:cancel']) {
+    await harness.callback(callback, session)
+    assert.deepEqual(deleted, [])
+    assert.deepEqual(session.pendingDelete?.words, ['c', 'd'])
+  }
+  await harness.callback(currentConfirm, session)
+  assert.deepEqual(deleted, ['c', 'd'])
+})
+
+test('Inbox edit initializes an absent session', async () => {
+  const harness = createHarness()
+  const ctx = harness.context('', 'inbox:edit:item-1')
+  ctx.session = undefined
+  await harness.handlers.get('callback_query')![0](ctx, async () => undefined)
+  assert.equal((ctx as BotContext).session?.pendingTranslationEdit?.vocabularyItemId, 'item-1')
+  assert.match(harness.replies.at(-1)?.text ?? '', /Send replacement translations/)
 })

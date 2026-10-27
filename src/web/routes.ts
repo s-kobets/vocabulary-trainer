@@ -20,6 +20,8 @@ declare module 'fastify' {
 }
 
 const COOKIE_NAME = 'vocabulary_session'
+const LOGIN_COOKIE_NAME = 'vocabulary_login'
+const LOGIN_SECONDS = 300
 const SESSION_DAYS = 30
 
 type WebDependencies = {
@@ -79,18 +81,24 @@ export function registerWebRoutes(app: FastifyInstance, dependencies: WebDepende
   ))
 
   app.get('/login', async (request, reply) => {
+    reply.header('cache-control', 'no-store')
     const sessionId = cookieValue(request, COOKIE_NAME)
     if (sessionId && sessions.findUserId(sessionId)) return reply.redirect('/')
     const message = queryString(request).notice
-    const authUrl = config.appUrl
-      ? new URL('/auth/telegram', config.appUrl).toString()
-      : new URL('/auth/telegram', `${request.protocol}://${request.hostname}`).toString()
-    return reply.type('text/html; charset=utf-8').send(renderLogin(config.telegramBotUsername, authUrl, message))
+    const state = sessions.createLoginAttempt(new Date(Date.now() + LOGIN_SECONDS * 1000).toISOString())
+    reply.header('set-cookie', `${LOGIN_COOKIE_NAME}=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${LOGIN_SECONDS}${secureCookie ? '; Secure' : ''}`)
+    const authUrl = new URL('/auth/telegram', config.appUrl ?? `${request.protocol}://${request.host}`)
+    authUrl.searchParams.set('state', state)
+    return reply.type('text/html; charset=utf-8').send(renderLogin(config.telegramBotUsername, authUrl.toString(), message))
   })
 
   app.get('/auth/telegram', async (request, reply) => {
-    const profile = verifyTelegramAuth(queryString(request), config.telegramBotToken)
-    if (!profile) return redirect(reply, '/login', 'Не удалось подтвердить вход. Попробуйте ещё раз.')
+    reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer')
+    const { state, ...auth } = queryString(request)
+    const profile = verifyTelegramAuth(auth, config.telegramBotToken)
+    if (!state || state !== cookieValue(request, LOGIN_COOKIE_NAME) || !profile || !sessions.consumeLoginAttempt(state)) {
+      return redirect(reply, '/login', 'Не удалось подтвердить вход. Попробуйте ещё раз.')
+    }
     const user = userService.ensureFromTelegram(profile)
     dependencies.telegramAccounts.updateTelegramProfile(user.id, profile.telegramUserId, profile)
     const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString()
@@ -184,14 +192,8 @@ export function registerWebRoutes(app: FastifyInstance, dependencies: WebDepende
     const texts = bodyString(request, 'text').split(/\r?\n/).map((text) => text.trim()).filter(Boolean).slice(0, 20)
     if (!texts.length) return redirect(reply, '/vocabulary', 'Введите слово или фразу.')
     if (texts.some((text) => text.length > 500)) return redirect(reply, '/vocabulary', 'Ограничение — 500 символов на слово или фразу.')
-    let added = 0
-    let duplicates = 0
-    for (const text of texts) {
-      const result = await vocabularyService.addText(userId, pair, text)
-      if (result.duplicate) duplicates += 1
-      else added += 1
-    }
-    const summary = `${added} добавлено${duplicates ? `, ${duplicates} уже было` : ''}.`
+    const { added, duplicates, failed } = await vocabularyService.addTexts(userId, pair, texts)
+    const summary = `${added} добавлено${duplicates ? `, ${duplicates} уже было` : ''}${failed ? `, ${failed} не удалось добавить` : ''}.`
     return redirect(reply, '/vocabulary', summary)
   })
 

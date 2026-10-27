@@ -3,6 +3,7 @@ import { getCurrentUser } from './context'
 import { renderReviewAnswer, renderReviewPrompt } from './messages'
 import type { BotContext, BotDependencies } from './telegram.types'
 import type { ReviewResult } from '../reviews/review.algorithm'
+import { ReviewNotDueError } from '../reviews/review.service'
 
 const expiredMessage = 'Review session expired. Send /review to start again.'
 
@@ -170,7 +171,13 @@ export function registerReviewHandlers(bot: Telegraf<BotContext>, dependencies: 
       }
 
       const result = match[1] as ReviewResult
-      dependencies.reviewService.answer(current.user.id, current.item.id, result, new Date())
+      try {
+        dependencies.reviewService.answer(current.user.id, current.item.id, result, new Date())
+      } catch (error) {
+        if (!(error instanceof ReviewNotDueError)) throw error
+        await expire(ctx)
+        return
+      }
       current.review.index += 1
       current.review.revealed = false
 

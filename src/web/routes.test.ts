@@ -30,7 +30,7 @@ function signedAuth(id: string): string {
   return new URLSearchParams({ ...auth, hash }).toString()
 }
 
-test('web auth shares user data across vocabulary capture and review', async (t) => {
+function createWebApp(t: test.TestContext) {
   const db = new Database(':memory:')
   runMigrations(db, path.join(__dirname, '../db/migrations'))
   const users = new UserRepository(db)
@@ -55,7 +55,22 @@ test('web auth shares user data across vocabulary capture and review', async (t)
     reviewService,
   })
   t.after(async () => { await app.close(); db.close() })
+  return { app, db, users, telegramAccounts, settings, languagePairs, vocabularyService, sessions }
+}
 
+async function beginLogin(app: ReturnType<typeof createHttpApp>) {
+  const login = await app.inject({ url: '/login', headers: { host: 'localhost:3000' } })
+  assert.equal(login.statusCode, 200)
+  assert.equal(typeof login.headers['set-cookie'], 'string', 'login must create browser-bound state')
+  const cookie = (login.headers['set-cookie'] as string).split(';')[0]
+  const state = decodeURIComponent(cookie.split('=')[1])
+  assert.match(login.body, new RegExp(`data-auth-url="http://localhost:3000/auth/telegram\\?state=${state}"`))
+  assert.match(login.headers['set-cookie'] as string, /HttpOnly; SameSite=Lax/)
+  return { cookie, state }
+}
+
+test('web auth shares user data across vocabulary capture and review', async (t) => {
+  const { app, db, users, telegramAccounts, settings, languagePairs, vocabularyService, sessions } = createWebApp(t)
   const protectedPage = await app.inject({ method: 'GET', url: '/' })
   assert.equal(protectedPage.statusCode, 302)
   assert.equal(protectedPage.headers.location, '/login')
@@ -65,7 +80,10 @@ test('web auth shares user data across vocabulary capture and review', async (t)
   assert.equal(stylesheet.statusCode, 200)
   assert.match(stylesheet.headers['content-type'] as string, /text\/css/)
 
-  const auth = await app.inject({ method: 'GET', url: `/auth/telegram?${signedAuth('987654321')}` })
+  const attempt = await beginLogin(app)
+  const auth = await app.inject({
+    url: `/auth/telegram?${signedAuth('987654321')}&state=${attempt.state}`, headers: { cookie: attempt.cookie },
+  })
   assert.equal(auth.statusCode, 302)
   const cookie = (auth.headers['set-cookie'] as string).split(';')[0]
   const user = new UserService(db, users, telegramAccounts, settings).findByTelegramUserId('987654321')!
@@ -119,4 +137,42 @@ test('web auth shares user data across vocabulary capture and review', async (t)
   const logout = await app.inject({ method: 'POST', url: '/logout', headers: { cookie } })
   assert.equal(logout.statusCode, 302)
   assert.equal(sessions.findUserId(decodeURIComponent(cookie.split('=')[1].split(';')[0])), null)
+})
+
+test('Telegram callback rejects missing or mismatched browser state without replacing an existing login', async (t) => {
+  const { app, sessions, telegramAccounts, users, settings, db } = createWebApp(t)
+  const user = new UserService(db, users, telegramAccounts, settings).ensureFromTelegram({ telegramUserId: '101' })
+  const existingSession = sessions.create(user.id, new Date(Date.now() + 60_000).toISOString())
+  const existingCookie = `vocabulary_session=${existingSession}`
+  const direct = await app.inject({ url: `/auth/telegram?${signedAuth('202')}`, headers: { cookie: existingCookie } })
+  assert.match(direct.headers.location ?? '', /^\/login\?/)
+  assert.equal(direct.headers['set-cookie'], undefined)
+  assert.equal(sessions.findUserId(existingSession), user.id)
+
+  const first = await beginLogin(app)
+  const second = await beginLogin(app)
+  const mismatched = await app.inject({
+    url: `/auth/telegram?${signedAuth('202')}&state=${first.state}`, headers: { cookie: `${existingCookie}; ${second.cookie}` },
+  })
+  assert.match(mismatched.headers.location ?? '', /^\/login\?/)
+  assert.equal(mismatched.headers['set-cookie'], undefined)
+  assert.equal(telegramAccounts.findByTelegramUserId('202'), null)
+})
+
+test('Telegram login attempts expire and valid callbacks can be consumed only once', async (t) => {
+  const { app, db } = createWebApp(t)
+  const expired = await beginLogin(app)
+  db.prepare('UPDATE web_login_attempts SET expires_at = ?').run('2000-01-01T00:00:00.000Z')
+  const expiredResult = await app.inject({
+    url: `/auth/telegram?${signedAuth('101')}&state=${expired.state}`, headers: { cookie: expired.cookie },
+  })
+  assert.match(expiredResult.headers.location ?? '', /^\/login\?/)
+
+  const attempt = await beginLogin(app)
+  const url = `/auth/telegram?${signedAuth('101')}&state=${attempt.state}`
+  const accepted = await app.inject({ url, headers: { cookie: attempt.cookie } })
+  assert.equal(accepted.headers.location, '/')
+  const replay = await app.inject({ url, headers: { cookie: attempt.cookie } })
+  assert.match(replay.headers.location ?? '', /^\/login\?/)
+  assert.deepEqual(db.prepare('SELECT COUNT(*) AS count FROM sessions').get(), { count: 1 })
 })

@@ -4,6 +4,8 @@ import { REVIEW_INTERVALS, calculateNextReview, type ReviewResult } from './revi
 import { ReviewRepository } from './review.repository'
 import type { DueReview, ReviewOutcome } from './review.types'
 
+export class ReviewNotDueError extends Error {}
+
 export class ReviewService {
   constructor(
     private readonly db: SqliteDatabase,
@@ -52,6 +54,9 @@ export class ReviewService {
       const item = this.vocabulary.findByIdForUser(userId, itemId)
       const state = this.reviews.getState(userId, itemId)
       if (!item || !state) throw new Error('Review item is not available')
+      if (item.status === 'inbox' || state.nextReviewAt > now.toISOString()) {
+        throw new ReviewNotDueError('Review item is not due')
+      }
 
       const next = calculateNextReview({ level: state.level, result, now })
       this.reviews.createReview(userId, itemId, {

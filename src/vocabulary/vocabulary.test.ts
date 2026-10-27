@@ -62,6 +62,15 @@ class RecordingDictionaryProvider {
   }
 }
 
+test('batch import reports partial failures and duplicates while continuing to later words', async () => {
+  const { db, repository } = createVocabulary()
+  const service = new VocabularyService(repository, new RecordingDictionaryProvider())
+  const result = await service.addTexts('user-a', createPair(), ['alpha', 'alpha', ' ', 'bravo'])
+  assert.deepEqual(result, { added: 2, duplicates: 1, failed: 1 })
+  assert.deepEqual(repository.listForUser('user-a').map((item) => item.text).sort(), ['alpha', 'bravo'])
+  db.close()
+})
+
 test('scopes item reads and writes to the owning user', () => {
   const { db, repository } = createVocabulary()
   const item = repository.create(createInput())

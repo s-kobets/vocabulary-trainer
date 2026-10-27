@@ -30,8 +30,9 @@ test('migrations create the schema and are idempotent', () => {
     'user_settings',
     'users',
     'vocabulary_items',
+    'web_login_attempts',
   ])
-  assert.deepEqual(migrations.map((row) => row.version), ['001', '002', '003'])
+  assert.deepEqual(migrations.map((row) => row.version), ['001', '002', '003', '004'])
   assert.equal(isDatabaseHealthy(db), true)
   db.close()
 })

@@ -38,6 +38,10 @@ and review schedule as the bot; it also supports creating a language pair,
 adding words, moving them into Learning, and completing due reviews. Website
 sessions last 30 days and are stored in SQLite.
 
+Start sign-in from `/login` in the browser where you will use the site. Each
+login attempt is browser-bound, expires after five minutes, and can be completed
+only once. HTTP request logs omit query parameters, including Telegram login data.
+
 ## Telegram commands
 
 - `/start` starts onboarding and chooses the first language pair.
@@ -222,6 +226,9 @@ Send one replacement translation per line. The new list replaces all previous
 translations. During `/review`, use `Edit translation` on a revealed answer card
 to start the same flow without typing the source word.
 
+Manual translation edits stop automatic enrichment for that card. A dictionary
+request already in progress cannot overwrite or clear the saved manual translation.
+
 ## Command Lifecycle
 
 The usual learning flow connects commands and inline buttons as follows:
@@ -309,7 +316,10 @@ Create a daily local backup with host cron:
 15 3 * * * /srv/vocabulary/app/scripts/backup-sqlite.sh /srv/vocabulary/data/vocabulary.db /srv/vocabulary/backups >> /var/log/vocabulary-backup.log 2>&1
 ```
 
-The backup script verifies SQLite integrity and keeps the newest seven copies.
+The host running these scripts needs the `sqlite3` command-line tool. The backup
+script verifies SQLite integrity and keeps the newest seven copies. Both scripts
+reject missing source files and databases without the application tables; source
+files are opened read-only. A rejected restore leaves the target database intact.
 To restore, stop the service, restore a verified backup, and start it again:
 
 ```bash
@@ -328,6 +338,9 @@ Set `DATABASE_PATH` to change the SQLite database location. The default is
 `./data/vocabulary.db`.
 
 ## Testing
+
+The test suite also runs the backup/restore scripts and requires Bash and the
+`sqlite3` command-line tool.
 
 ```bash
 npm test

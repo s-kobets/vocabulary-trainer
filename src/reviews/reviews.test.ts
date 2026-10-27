@@ -136,6 +136,19 @@ test('filters due reviews by language pair when requested', () => {
   db.close()
 })
 
+test('due cards preserve vocabulary enrichment metadata', () => {
+  const { db, vocabulary, service } = createReviews()
+  const item = vocabulary.create({
+    userId: 'user-a', languagePairId: 'pair-a', text: 'pending', normalizedText: 'pending',
+    itemType: 'word', translations: [], examples: [], status: 'inbox', enrichmentStatus: 'pending',
+  })
+  const now = new Date('2026-09-18T12:00:00.000Z')
+  service.startLearning('user-a', 'pair-a', now)
+  assert.equal(service.getDue('user-a', now, 10)[0]?.item.enrichmentStatus, 'pending')
+  assert.equal(service.getDue('user-a', now, 10)[0]?.item.id, item.id)
+  db.close()
+})
+
 test('counts due learning and known reviews only in the requested pair', () => {
   const { db, vocabulary, reviews, service } = createReviews()
   db.prepare('INSERT INTO language_pairs (id, user_id, source_language, target_language, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -183,6 +196,20 @@ test('answers atomically update scoped state and preserve source-to-target histo
   })
   assert.equal(reviews.countReviewedToday('user-a', now), 1)
   assert.equal(reviews.countReviewedToday('user-b', now), 0)
+  db.close()
+})
+
+test('a repeated answer cannot advance a card before its next due time', () => {
+  const { db, vocabulary, reviews, service } = createReviews()
+  const item = createItem(vocabulary, 'user-a', 'alpha')
+  const now = new Date('2026-09-18T12:00:00.000Z')
+  service.startLearning('user-a', 'pair-a', now)
+  service.answer('user-a', item.id, 'correct', now)
+  assert.throws(() => service.answer('user-a', item.id, 'correct', now), /not due/)
+  assert.equal(reviews.getState('user-a', item.id)?.level, 1)
+  assert.equal(reviews.countReviewedToday('user-a', now), 1)
+  service.answer('user-a', item.id, 'correct', new Date('2026-09-19T12:00:00.000Z'))
+  assert.equal(reviews.getState('user-a', item.id)?.level, 2)
   db.close()
 })
 

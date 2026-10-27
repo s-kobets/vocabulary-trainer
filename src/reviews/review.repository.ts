@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import type { SqliteDatabase } from '../db/database'
-import type { VocabularyExample, VocabularyItem, VocabularyItemType, VocabularyStatus } from '../vocabulary/vocabulary.types'
+import { mapVocabulary, type VocabularyRow } from '../vocabulary/vocabulary.repository'
 import type { DueReview, Review, ReviewState } from './review.types'
 import type { ReviewResult } from './review.algorithm'
 
@@ -27,23 +27,7 @@ type ReviewStateRow = {
   updated_at: string
 }
 
-type VocabularyRow = {
-  id: string
-  user_id: string
-  language_pair_id: string
-  text: string
-  normalized_text: string
-  item_type: VocabularyItemType
-  translations_json: string
-  transcription: string | null
-  part_of_speech: string | null
-  examples_json: string
-  status: VocabularyStatus
-  created_at: string
-  updated_at: string
-}
-
-type DueRow = {
+type DueRow = Omit<VocabularyRow, 'id' | 'user_id' | 'created_at' | 'updated_at'> & {
   state_id: string
   state_user_id: string
   vocabulary_item_id: string
@@ -53,15 +37,6 @@ type DueRow = {
   state_updated_at: string
   item_id: string
   item_user_id: string
-  language_pair_id: string
-  text: string
-  normalized_text: string
-  item_type: VocabularyItemType
-  translations_json: string
-  transcription: string | null
-  part_of_speech: string | null
-  examples_json: string
-  status: VocabularyStatus
   item_created_at: string
   item_updated_at: string
 }
@@ -76,25 +51,6 @@ function mapState(row: ReviewStateRow | DueRow): ReviewState {
     nextReviewAt: row.next_review_at,
     createdAt: due ? row.state_created_at : row.created_at,
     updatedAt: due ? row.state_updated_at : row.updated_at,
-  }
-}
-
-function mapItem(row: VocabularyRow | DueRow): VocabularyItem {
-  const due = 'item_id' in row
-  return {
-    id: due ? row.item_id : row.id,
-    userId: due ? row.item_user_id : row.user_id,
-    languagePairId: row.language_pair_id,
-    text: row.text,
-    normalizedText: row.normalized_text,
-    itemType: row.item_type,
-    translations: JSON.parse(row.translations_json) as string[],
-    ...(row.transcription === null ? {} : { transcription: row.transcription }),
-    ...(row.part_of_speech === null ? {} : { partOfSpeech: row.part_of_speech }),
-    examples: JSON.parse(row.examples_json) as VocabularyExample[],
-    status: row.status,
-    createdAt: due ? row.item_created_at : row.created_at,
-    updatedAt: due ? row.item_updated_at : row.updated_at,
   }
 }
 
@@ -115,7 +71,7 @@ export class ReviewRepository {
         vocabulary_items.language_pair_id,
         vocabulary_items.text, vocabulary_items.normalized_text, vocabulary_items.item_type,
         vocabulary_items.translations_json, vocabulary_items.transcription,
-        vocabulary_items.part_of_speech, vocabulary_items.examples_json,
+        vocabulary_items.part_of_speech, vocabulary_items.examples_json, vocabulary_items.enrichment_status,
         vocabulary_items.status, vocabulary_items.created_at AS item_created_at,
         vocabulary_items.updated_at AS item_updated_at
       FROM review_states
@@ -128,7 +84,13 @@ export class ReviewRepository {
       ORDER BY review_states.next_review_at, vocabulary_items.created_at
       LIMIT ?
     `).all(...parameters) as DueRow[]
-    return rows.map((row) => ({ item: mapItem(row), state: mapState(row) }))
+    return rows.map((row) => ({
+      item: mapVocabulary({
+        ...row, id: row.item_id, user_id: row.item_user_id,
+        created_at: row.item_created_at, updated_at: row.item_updated_at,
+      }),
+      state: mapState(row),
+    }))
   }
 
   getState(userId: string, itemId: string): ReviewState | null {

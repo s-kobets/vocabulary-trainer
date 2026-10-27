@@ -47,3 +47,41 @@ test('SQLite session middleware removes expired and malformed sessions', async (
   assert.equal(count.count, 0)
   db.close()
 })
+
+test('concurrent updates preserve session progress for the same user without blocking other users', { timeout: 2000 }, async (t) => {
+  const db = new Database(':memory:')
+  t.after(() => db.close())
+  runMigrations(db, `${__dirname}/../db/migrations`)
+  const middleware = createSqliteSessionMiddleware(db)
+  const seed = context('42')
+  await middleware(seed, async () => {
+    seed.session = { review: { itemIds: ['a', 'b', 'c'], index: 0, revealed: false } }
+  })
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const first = context('42')
+  const second = context('42')
+  const firstUpdate = middleware(first, async () => { first.session!.review!.index++; await gate })
+  const secondUpdate = middleware(second, async () => { second.session!.review!.index++ })
+  await middleware(context('other-user'), async () => undefined)
+  release()
+  await Promise.all([firstUpdate, secondUpdate])
+  const restored = context('42')
+  await middleware(restored, async () => assert.equal(restored.session?.review?.index, 2))
+})
+
+test('session changes survive handler failure and the next update can proceed', async (t) => {
+  const db = new Database(':memory:')
+  t.after(() => db.close())
+  runMigrations(db, `${__dirname}/../db/migrations`)
+  const middleware = createSqliteSessionMiddleware(db)
+  const failed = context('42')
+  await assert.rejects(async () => {
+    await middleware(failed, async () => {
+      failed.session = { review: { itemIds: ['a'], index: 1, revealed: false } }
+      throw new Error('Telegram response failed after recording the answer')
+    })
+  }, /Telegram response failed/)
+  const restored = context('42')
+  await middleware(restored, async () => assert.equal(restored.session?.review?.index, 1))
+})

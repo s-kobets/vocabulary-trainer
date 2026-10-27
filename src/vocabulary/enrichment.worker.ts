@@ -1,4 +1,4 @@
-import type { DictionaryProvider } from '../dictionary/dictionary.types'
+import type { VocabularyService } from './vocabulary.service'
 import { dictionaryFailureFields } from '../dictionary/dictionary.errors'
 import type { VocabularyRepository } from './vocabulary.repository'
 import type { LanguagePairRepository } from '../languages/language-pair.repository'
@@ -12,7 +12,7 @@ export class EnrichmentWorker {
 
   constructor(
     private readonly repository: VocabularyRepository,
-    private readonly provider: DictionaryProvider,
+    private readonly service: VocabularyService,
     private readonly languagePairs: LanguagePairRepository,
     private readonly logger?: ErrorLogger,
     private readonly intervalMs = 60_000,
@@ -20,6 +20,8 @@ export class EnrichmentWorker {
 
   start(): void {
     if (this.timer) return
+    // Recover requests interrupted by the previous application process.
+    this.repository.resetStaleProcessing()
     this.stopped = false
     void this.runOnce()
     this.timer = setInterval(() => { void this.runOnce() }, this.intervalMs)
@@ -37,17 +39,14 @@ export class EnrichmentWorker {
     if (this.running || this.stopped) return
     this.running = true
     try {
-      this.repository.resetStaleProcessing()
       for (const item of this.repository.listPending(10)) {
         if (this.stopped) break
         try {
           const pair = this.languagePairs.findByIdForUser(item.userId, item.languagePairId)
-          if (!pair || !this.repository.claimPending(item.userId, item.id)) continue
-          const result = await this.provider.lookup({ text: item.text, ...pair })
-          this.repository.updateEnrichment(item.userId, item.id, { ...result, examples: result.examples ?? [], status: 'ready' })
+          if (!pair) continue
+          await this.service.enrich(item, pair)
         } catch (error) {
           this.logger?.error({ itemId: item.id, ...dictionaryFailureFields(error) }, 'Dictionary enrichment retry failed')
-          this.repository.updateEnrichment(item.userId, item.id, { translations: [], examples: [], status: 'pending', error: error instanceof Error ? error.name : 'ProviderError' })
         }
       }
     } finally {

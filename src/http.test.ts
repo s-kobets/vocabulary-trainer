@@ -1,11 +1,28 @@
 import { strict as assert } from 'node:assert'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import Database from 'better-sqlite3'
 import { createHttpApp } from './http'
 import { runMigrations } from './db/database'
 
 const migrationDirectory = path.join(__dirname, 'db/migrations')
+
+test('HTTP request logs exclude query parameters', () => {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', `
+    const Database = require('better-sqlite3')
+    const { createHttpApp } = require('./src/http')
+    const db = new Database(':memory:')
+    const app = createHttpApp(db)
+    app.inject({ url: '/health?hash=private-auth-signature&id=private-user' })
+      .then(() => app.close()).then(() => db.close())
+      .catch(() => { process.exitCode = 1 })
+  `], { cwd: path.join(__dirname, '..'), encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /incoming request/)
+  assert.match(result.stdout, /"url":"\/health"/)
+  assert.doesNotMatch(result.stdout, /private-auth-signature|private-user/)
+})
 
 test('health reports database status and exposes no other routes', async (t) => {
   const db = new Database(':memory:')

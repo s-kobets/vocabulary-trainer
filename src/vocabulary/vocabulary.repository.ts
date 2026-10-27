@@ -37,7 +37,7 @@ export type VocabularyUpdatePatch = {
   status?: VocabularyStatus
 }
 
-type VocabularyRow = {
+export type VocabularyRow = {
   id: string
   user_id: string
   language_pair_id: string
@@ -63,7 +63,7 @@ const selectColumns = `
   FROM vocabulary_items
 `
 
-function mapVocabulary(row: VocabularyRow): VocabularyItem {
+export function mapVocabulary(row: VocabularyRow): VocabularyItem {
   return {
     id: row.id,
     userId: row.user_id,
@@ -101,6 +101,7 @@ export class VocabularyRepository {
       status: input.status,
       createdAt: now,
       updatedAt: now,
+      ...(input.enrichmentStatus && input.enrichmentStatus !== 'ready' ? { enrichmentStatus: input.enrichmentStatus } : {}),
     }
 
     this.db.prepare(`
@@ -142,7 +143,7 @@ export class VocabularyRepository {
       SET translations_json = ?, transcription = ?, part_of_speech = ?, examples_json = ?,
           enrichment_status = ?, enrichment_attempts = enrichment_attempts + 1,
           enrichment_last_error = ?, enriched_at = ?, enrichment_next_retry_at = ?, updated_at = ?
-      WHERE user_id = ? AND id = ?
+      WHERE user_id = ? AND id = ? AND enrichment_status = 'processing'
     `).run(
       JSON.stringify(patch.translations), patch.transcription ?? null, patch.partOfSpeech ?? null,
       JSON.stringify(patch.examples), patch.status, patch.error ?? null,
@@ -208,6 +209,9 @@ export class VocabularyRepository {
       ['normalized_text', normalizedText],
       ['item_type', normalizedText === undefined ? undefined : classifyText(normalizedText)],
       ['translations_json', patch.translations === undefined ? undefined : JSON.stringify(patch.translations)],
+      ['enrichment_status', patch.translations === undefined ? undefined : 'ready'],
+      ['enrichment_next_retry_at', patch.translations === undefined ? undefined : null],
+      ['enrichment_last_error', patch.translations === undefined ? undefined : null],
       ['transcription', patch.transcription],
       ['part_of_speech', patch.partOfSpeech],
       ['examples_json', patch.examples === undefined ? undefined : JSON.stringify(patch.examples)],
